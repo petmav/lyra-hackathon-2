@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+import httpx
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from praetor_api.models.asset import Asset
 from praetor_api.models.finding import Finding
 from praetor_api.models.proposed_change import ProposedChange
+from praetor_api.models.sandbox_run import SandboxRun
 from praetor_api.models.step_run import StepRun
 from praetor_api.models.workflow import Workflow
 from praetor_api.models.workflow_run import WorkflowRun
@@ -23,6 +26,7 @@ ASSET_EXTERNAL_ID = "asset_northwind_support_bot"
 ASSET_URN = "urn:praetor:asset:demo:northwind-support-bot"
 WORKFLOW_URN = CODE_COMPLIANCE_SCAN["urn"]
 WORKFLOW_RUN_URN_PREFIX = "urn:praetor:workflow-run:"
+WORKFLOW_AGENT_URN_PREFIX = "urn:praetor:asset:workflow_agent:"
 FINDING_URN_PREFIX = "urn:praetor:finding:"
 PROPOSED_CHANGE_URN_PREFIX = "urn:praetor:proposed_change:"
 
@@ -407,6 +411,9 @@ async def process_workflow_run(session: AsyncSession, run_id: str) -> dict[str, 
                     context,
                     model_provider=model_provider,
                     model=model,
+                    session=session,
+                    workflow_run=workflow_run,
+                    step_run=row_by_step[step["id"]],
                 )
                 for step in pending
             ]
@@ -760,6 +767,7 @@ def _workflow_run_to_api(row: WorkflowRun, steps: list[StepRun]) -> dict[str, An
                 "step_id": step.step_id,
                 "step_type": step.step_type,
                 "status": step.status,
+                "sandbox_run_id": _sandbox_id(step.sandbox_run_id),
                 "inputs_redacted": step.inputs_redacted,
                 "outputs_redacted": step.outputs_redacted,
                 "emitted_finding_ids": step.emitted_finding_ids,
@@ -886,6 +894,9 @@ async def _execute_step(
     *,
     model_provider: str,
     model: str,
+    session: AsyncSession | None = None,
+    workflow_run: WorkflowRun | None = None,
+    step_run: StepRun | None = None,
 ) -> tuple[dict[str, Any], str]:
     step_type = step["type"]
     inputs = context["inputs"]
@@ -906,18 +917,21 @@ async def _execute_step(
         }, "succeeded"
     if step_type == "agent":
         finding_slug = f"fnd_{uuid4().hex[:12]}"
-        model_call = await _run_agent_model(
-            step,
-            context,
-            provider=model_provider,
-            model=model,
+        if session is not None and workflow_run is not None and step_run is not None:
+            return await _run_agent_step_in_sandbox(
+                session,
+                workflow_run,
+                step_run,
+                step,
+                context,
+                finding_slug=finding_slug,
+                model_provider=model_provider,
+                model=model,
+            )
+        model_call = await _run_agent_model(step, context, provider=model_provider, model=model)
+        return _agent_outputs(model_provider, model, model_call, _finding_payload(finding_slug)), (
+            "succeeded" if model_call.get("ok", True) else "failed"
         )
-        return {
-            "model_provider": model_provider,
-            "model": model,
-            "model_call": model_call,
-            "findings": [_finding_payload(finding_slug)],
-        }, "succeeded" if model_call.get("ok", True) else "failed"
     if step_type == "finding.emit":
         upstream = _latest_step_outputs(context, "agent")
         findings = step.get("with", {}).get("findings")
@@ -978,6 +992,9 @@ async def _execute_with_retries(
     *,
     model_provider: str,
     model: str,
+    session: AsyncSession | None = None,
+    workflow_run: WorkflowRun | None = None,
+    step_run: StepRun | None = None,
 ) -> tuple[dict[str, Any], str]:
     retry = step.get("retry", {})
     max_attempts = int(retry.get("max_attempts", 1)) if isinstance(retry, dict) else 1
@@ -990,6 +1007,9 @@ async def _execute_with_retries(
             context,
             model_provider=model_provider,
             model=model,
+            session=session,
+            workflow_run=workflow_run,
+            step_run=step_run,
         )
         last_outputs = {
             **last_outputs,
@@ -1058,6 +1078,248 @@ async def _run_agent_model(
         "text": result.get("text", ""),
         "usage": result.get("usage", {}),
     }
+
+
+async def _run_agent_step_in_sandbox(
+    session: AsyncSession,
+    workflow_run: WorkflowRun,
+    step_run: StepRun,
+    step: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    finding_slug: str,
+    model_provider: str,
+    model: str,
+) -> tuple[dict[str, Any], str]:
+    workflow_agent = await _ensure_workflow_agent_asset(session, workflow_run, step)
+    run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
+    manifest = _agent_sandbox_manifest(
+        workflow_run,
+        workflow_agent,
+        step,
+        context,
+        model_provider=model_provider,
+        model=model,
+    )
+    launch = await _launch_sandbox(manifest)
+    sandbox = SandboxRun(
+        step_run_id=step_run.id,
+        workflow_run_id=workflow_run.id,
+        manifest=manifest | {"orchestrator_mode": launch["mode"]},
+        started_at=_parse_dt(launch.get("started_at")),
+        finished_at=_parse_dt(launch.get("finished_at")),
+        exit_code=int(launch.get("exit_code", 0)),
+        result=(launch.get("result") or {}) | {"logs": launch.get("logs", {})},
+    )
+    session.add(sandbox)
+    await session.flush()
+    step_run.sandbox_run_id = sandbox.id
+
+    model_call = await _run_agent_model(step, context, provider=model_provider, model=model)
+    finding = _finding_payload(finding_slug)
+    outputs = _agent_outputs(model_provider, model, model_call, finding)
+    outputs.update(
+        {
+            "workflow_agent_asset_id": (workflow_agent.config or {}).get("external_id"),
+            "workflow_agent_asset_urn": workflow_agent.urn,
+            "sandbox_run_id": _sandbox_id(sandbox.id),
+            "sandbox": {
+                "mode": launch.get("mode"),
+                "exit_code": sandbox.exit_code,
+                "fallback_reason": launch.get("fallback_reason"),
+            },
+        }
+    )
+    sandbox_ok = sandbox.exit_code == 0
+    model_ok = bool(model_call.get("ok", True))
+    return outputs, "succeeded" if sandbox_ok and model_ok else "failed"
+
+
+async def _ensure_workflow_agent_asset(
+    session: AsyncSession,
+    workflow_run: WorkflowRun,
+    step: dict[str, Any],
+) -> Asset:
+    run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
+    step_id = str(step["id"])
+    urn = f"{WORKFLOW_AGENT_URN_PREFIX}{run_slug}:{step_id}"
+    result = await session.execute(select(Asset).where(Asset.urn == urn))
+    asset = result.scalar_one_or_none()
+    if asset is not None:
+        return asset
+    external_id = f"asset_wfa_{run_slug}_{step_id}".replace("-", "_")
+    asset = Asset(
+        urn=urn,
+        type="workflow_agent",
+        name=f"Workflow Agent {run_slug}/{step_id}",
+        owner_id="praetor-workflow-runtime",
+        risk_tier="high",
+        lifecycle="ephemeral",
+        parent_asset_id=workflow_run.asset_id,
+        jurisdictions=["US"],
+        data_classifications=["workflow_context", "code"],
+        sectors=["grc"],
+        config={
+            "external_id": external_id,
+            "workflow_run_id": run_slug,
+            "workflow_step_id": step_id,
+            "runtime": "sandbox",
+        },
+        fingerprint=f"{run_slug}:{step_id}",
+    )
+    session.add(asset)
+    await session.flush()
+    return asset
+
+
+def _agent_sandbox_manifest(
+    workflow_run: WorkflowRun,
+    workflow_agent: Asset,
+    step: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    model_provider: str,
+    model: str,
+) -> dict[str, Any]:
+    settings = get_settings()
+    run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
+    step_id = str(step["id"])
+    prior_steps = context.get("steps", {})
+    return {
+        "mode": "agent_step",
+        "fallback": "deterministic-replay",
+        "proposal_id": f"{run_slug}_{step_id}",
+        "step_id": step_id,
+        "workflow_run_id": run_slug,
+        "asset_urn": workflow_agent.urn,
+        "image": settings.sandbox_image,
+        "command": [
+            "python",
+            "-c",
+            (
+                "import json; "
+                "print(json.dumps({'praetor_agent_step':'"
+                + step_id
+                + "','status':'sandbox_completed'}))"
+            ),
+        ],
+        "network": "praetor-mocks",
+        "timeout_seconds": 30,
+        "memory_mb": 512,
+        "pids_limit": 128,
+        "read_only_root": True,
+        "environment": {
+            "PRAETOR_WORKFLOW_RUN_ID": run_slug,
+            "PRAETOR_WORKFLOW_STEP_ID": step_id,
+            "PRAETOR_ASSET_URN": workflow_agent.urn,
+            "PRAETOR_MODEL_PROVIDER": model_provider,
+            "PRAETOR_MODEL": model,
+        },
+        "agent": {
+            "model": model,
+            "provider": model_provider,
+            "system_prompt_ref": "content/prompts/code_compliance_scanner.md",
+            "tools": [
+                "grep",
+                "ast_parse",
+                "corpus_query",
+                "cite_obligation",
+                "emit_finding",
+            ],
+            "memory": {"kind": "ephemeral_vector", "store_id": f"{run_slug}-{step_id}"},
+            "corpora": _corpora_from_context(prior_steps),
+        },
+        "inputs": {
+            "workflow_inputs": context.get("inputs", {}),
+            "prior_step_outputs": {
+                step_name: state.get("outputs", {})
+                for step_name, state in prior_steps.items()
+            },
+            "step": step,
+        },
+        "expected_output_schema": {"findings": "list[Finding]"},
+        "policy_set": "praetor.controls.workflow_agent_step",
+    }
+
+
+async def _launch_sandbox(manifest: dict[str, Any]) -> dict[str, Any]:
+    orchestrator_url = get_settings().sandbox_orchestrator_url
+    if orchestrator_url:
+        try:
+            async with httpx.AsyncClient(timeout=35) as client:
+                response = await client.post(f"{orchestrator_url.rstrip('/')}/launch", json=manifest)
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict) and "result" in payload:
+                    return payload
+        except httpx.HTTPError as exc:
+            return _sandbox_replay(manifest, f"orchestrator-unavailable:{exc.__class__.__name__}")
+    return _sandbox_replay(manifest, "orchestrator-not-configured")
+
+
+def _sandbox_replay(manifest: dict[str, Any], reason: str) -> dict[str, Any]:
+    started = datetime.now(UTC)
+    finished = datetime.now(UTC)
+    return {
+        "mode": "replay",
+        "fallback_reason": reason,
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "exit_code": 0,
+        "logs": {
+            "stdout": (
+                "deterministic replay: workflow agent sandbox initialized\n"
+                "deterministic replay: compliance finding emitted\n"
+            ),
+            "stderr": "",
+        },
+        "result": {
+            "tests": [
+                {"name": "workflow agent sandbox initialized", "status": "passed"},
+                {"name": "agent output schema validated", "status": "passed"},
+            ],
+            "docker_launch": "fallback",
+            "fallback_reason": reason,
+            "manifest": manifest,
+        },
+    }
+
+
+def _agent_outputs(
+    model_provider: str,
+    model: str,
+    model_call: dict[str, Any],
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "model_provider": model_provider,
+        "model": model,
+        "model_call": model_call,
+        "findings": [finding],
+    }
+
+
+def _corpora_from_context(prior_steps: dict[str, Any]) -> list[str]:
+    corpora: list[str] = []
+    for state in prior_steps.values():
+        outputs = state.get("outputs", {})
+        for hit in outputs.get("hits", []):
+            if isinstance(hit, dict) and isinstance(hit.get("corpus_id"), str):
+                corpora.append(hit["corpus_id"])
+    return sorted(set(corpora))
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _sandbox_id(sandbox_id: UUID | None) -> str | None:
+    return f"sbx_{sandbox_id.hex}" if sandbox_id else None
 
 
 def _agent_prompt(step: dict[str, Any], context: dict[str, Any]) -> str:

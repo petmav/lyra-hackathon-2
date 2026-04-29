@@ -105,6 +105,9 @@ Workflow definition responses include the full frontend contract: `trigger_confi
 Workflow-run responses include entity metadata, `asset_id`, `evidence_record_ids`, normalized
 step fields, and DAG `depends_on` edges. The frontend creates production runs through
 `POST /workflows/{id}:run`; fixture run ids such as `wfr_2026_04_28_001` are demo-only.
+Workflow `agent` steps create first-class `workflow_agent` assets, launch through the sandbox
+orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in
+their step response.
 
 Production mode registers the bundled deterministic workflow templates:
 

@@ -77,6 +77,7 @@ Legend:
 - ~~Sandbox log streaming, hardened isolation defaults, and MCP JSON-RPC stub negotiation are covered by live E2E.~~
 - ~~Queued workflow execution mode exists: `PRAETOR_WORKFLOW_EXECUTION_MODE=queued` persists runs as queued, `POST /workflow-runs:drain` processes them, and the Compose `workflow` service now runs the drain loop.~~
 - ~~Postgres integration tests cover queued workflow drain execution: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`3 passed`).~~
+- ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Partial: the Compose `workflow` worker periodically invokes `POST /evidence-records:sweep`, so evidence materialization no longer depends only on frontend/API reads.~~
 - ~~Persisted event reads now reconstruct ordering from hash-chain links, avoiding same-transaction timestamp ordering failures.~~
 - Open: replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
@@ -151,11 +152,13 @@ Legend:
 - ~~Partial: Task 3.2 queued workflow dispatch exists through `PRAETOR_WORKFLOW_EXECUTION_MODE=queued`, `POST /workflow-runs:drain`, and the workflow worker container.~~
 - ~~Partial: Task 3.2 ready branch batches execute concurrently inside a drain cycle.~~
 - Open: Task 3.2 distributed node-run leases, worker-heartbeat recovery, and true long-running async step isolation.
+- ~~Partial: Task 3.6 workflow agent steps are now represented as first-class `workflow_agent` assets and linked to sandbox runs.~~
 - ~~Partial: Task 3.3 MCP client adapter boundary exists for hook health/calls, and MCP stubs now expose `/call`.~~
 - ~~Partial: Task 3.3 JSON-RPC MCP session handshake and tool/resource listing/call path exists for stubs.~~
 - Open: Task 3.3 authenticated MCP sessions and richer production tool/resource negotiation beyond stubs.
 - ~~Partial: sandbox runs persist Docker-oriented manifests, orchestrator mode, logs, replay results, and lifecycle state in Postgres.~~
 - ~~Partial: Task 3.4 `apps/sandbox` now exposes a launch service that runs containers through the mounted Docker socket and falls back to deterministic replay.~~
+- ~~Partial: Task 3.4 workflow agent steps invoke the sandbox launch service/replay path before model/finding output is persisted.~~
 - ~~Partial: Task 3.4 sandbox log streaming endpoint and hardened default Docker isolation profile exist.~~
 - Open: Task 3.4 live log tailing while the container is still running and stronger host-level isolation such as gVisor/seccomp profiles.
 - ~~Partial: backend corpus storage persists ingested documents and chunks for seeded corpus IDs.~~

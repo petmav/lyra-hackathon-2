@@ -249,6 +249,12 @@ def require_workflow_run(run: dict[str, Any]) -> dict[str, Any]:
     step_ids = {step.get("step_id") for step in run["step_runs"]}
     if not {"pull", "scan", "emit"} <= step_ids:
         raise AssertionError(f"missing required steps in {step_ids}")
+    scan_step = next((step for step in run["step_runs"] if step.get("step_id") == "scan"), {})
+    if not str(scan_step.get("sandbox_run_id", "")).startswith("sbx_"):
+        raise AssertionError("scan step did not expose sandbox_run_id")
+    outputs = scan_step.get("outputs_redacted", {})
+    if not isinstance(outputs, dict) or "workflow_agent_asset_urn" not in outputs:
+        raise AssertionError("scan step did not expose workflow_agent_asset_urn")
     return run
 
 
