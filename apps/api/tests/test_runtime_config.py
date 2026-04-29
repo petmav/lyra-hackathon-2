@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from praetor_api.main import app
-from praetor_api.services.auth import extract_roles, has_role, verify_hs256_jwt
+from praetor_api.services.auth import extract_roles, has_role, verify_hs256_jwt, verify_oidc_jwt
 from praetor_api.services.secrets import resolve_secret, secret_status
 from praetor_api.settings import Settings, get_settings
 
@@ -10,6 +10,9 @@ import hashlib
 import hmac
 import json
 import time
+
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives import hashes
 
 HEADERS = {"Authorization": "Bearer dev"}
 
@@ -38,11 +41,16 @@ def test_settings_accepts_queued_workflow_execution() -> None:
 
 
 def test_settings_accepts_jwt_auth_and_vault_secret_backend() -> None:
-    settings = Settings(PRAETOR_AUTH_MODE="jwt", PRAETOR_SECRET_BACKEND="vault")
+    settings = Settings(
+        PRAETOR_AUTH_MODE="jwt",
+        PRAETOR_SECRET_BACKEND="vault",
+        PRAETOR_JWT_JWKS_URI="https://issuer.example/jwks",
+    )
 
     assert settings.auth_mode == "jwt"
     assert settings.secret_backend == "vault"
     assert settings.openai_api_key_ref == "secret:openai_api_key"
+    assert settings.jwt_jwks_uri == "https://issuer.example/jwks"
 
 
 def test_runtime_config_reports_model_defaults() -> None:
@@ -114,6 +122,41 @@ def test_hs256_jwt_verification_and_role_hierarchy() -> None:
     assert has_role(extract_roles(claims), "admin") is False
 
 
+def test_oidc_jwks_verification(monkeypatch) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    jwk = {
+        "kty": "RSA",
+        "kid": "unit-key",
+        "alg": "RS256",
+        "use": "sig",
+        "n": _b64(public_numbers.n.to_bytes((public_numbers.n.bit_length() + 7) // 8, "big")),
+        "e": _b64(public_numbers.e.to_bytes((public_numbers.e.bit_length() + 7) // 8, "big")),
+    }
+    token = _rs256_jwt(
+        {"sub": "alice", "iss": "https://issuer.example", "aud": "praetor", "roles": ["viewer"], "exp": int(time.time()) + 120},
+        private_key,
+        "unit-key",
+    )
+
+    monkeypatch.setenv("PRAETOR_AUTH_MODE", "jwt")
+    monkeypatch.setenv("PRAETOR_JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("PRAETOR_JWT_AUDIENCE", "praetor")
+    monkeypatch.setenv("PRAETOR_JWT_JWKS_URI", "https://issuer.example/jwks")
+    get_settings.cache_clear()
+
+    import praetor_api.services.auth as auth_service
+
+    auth_service._jwks_cached.cache_clear()
+    monkeypatch.setattr(auth_service, "_fetch_json", lambda url: {"keys": [jwk]})
+
+    claims = verify_oidc_jwt(token)
+
+    assert claims["sub"] == "alice"
+    get_settings.cache_clear()
+    auth_service._jwks_cached.cache_clear()
+
+
 def test_secret_resolution_reports_backend(monkeypatch) -> None:
     monkeypatch.setenv("PRAETOR_SECRET_BACKEND", "env")
     monkeypatch.setenv("UNIT_TEST_TOKEN", "secret-value")
@@ -132,6 +175,14 @@ def _jwt(claims: dict, secret: str) -> str:
     encoded_claims = _b64json(claims)
     signing_input = f"{encoded_header}.{encoded_claims}".encode()
     signature = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+    return f"{encoded_header}.{encoded_claims}.{_b64(signature)}"
+
+
+def _rs256_jwt(claims: dict, private_key, kid: str) -> str:
+    encoded_header = _b64json({"alg": "RS256", "typ": "JWT", "kid": kid})
+    encoded_claims = _b64json(claims)
+    signing_input = f"{encoded_header}.{encoded_claims}".encode()
+    signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
     return f"{encoded_header}.{encoded_claims}.{_b64(signature)}"
 
 

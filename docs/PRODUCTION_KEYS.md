@@ -13,11 +13,15 @@ PRAETOR_AUTH_MODE=jwt
 PRAETOR_JWT_SECRET=<shared-hs256-secret>
 PRAETOR_JWT_ISSUER=<optional-issuer>
 PRAETOR_JWT_AUDIENCE=<optional-audience>
+PRAETOR_JWT_JWKS_URI=<https://issuer.example/.well-known/jwks.json>
+# or:
+PRAETOR_OIDC_DISCOVERY_URL=<https://issuer.example/.well-known/openid-configuration>
 PRAETOR_API_TOKEN=<worker-or-service-token>
 NEXT_PUBLIC_API_TOKEN=<browser-token-for-local-demo-only>
 ```
 
 JWT roles can come from `roles`, `role`, `groups`, `scope`, or `scp`. Read routes require `viewer` by default; write routes require `operator`; `admin` satisfies both.
+When a JWKS URI or OIDC discovery URL is configured, Praetor verifies RS256 signatures against the issuer's published JWK set instead of using the local HS256 secret.
 
 ## Agent Model Providers
 

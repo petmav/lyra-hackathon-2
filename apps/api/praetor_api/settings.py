@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     jwt_secret: str | None = Field(default=None, alias="PRAETOR_JWT_SECRET")
     jwt_issuer: str | None = Field(default=None, alias="PRAETOR_JWT_ISSUER")
     jwt_audience: str | None = Field(default=None, alias="PRAETOR_JWT_AUDIENCE")
+    jwt_jwks_uri: str | None = Field(default=None, alias="PRAETOR_JWT_JWKS_URI")
+    oidc_discovery_url: str | None = Field(default=None, alias="PRAETOR_OIDC_DISCOVERY_URL")
+    oidc_cache_seconds: int = Field(default=300, alias="PRAETOR_OIDC_CACHE_SECONDS")
     jwt_required_read_role: str = Field(default="viewer", alias="PRAETOR_JWT_REQUIRED_READ_ROLE")
     jwt_required_write_role: str = Field(default="operator", alias="PRAETOR_JWT_REQUIRED_WRITE_ROLE")
     secret_backend: Literal["env", "vault", "env_then_vault", "vault_then_env"] = Field(

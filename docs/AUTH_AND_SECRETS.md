@@ -13,10 +13,15 @@ JWT settings:
 - `PRAETOR_JWT_SECRET`: shared HS256 verification secret.
 - `PRAETOR_JWT_ISSUER`: optional required `iss` claim.
 - `PRAETOR_JWT_AUDIENCE`: optional required `aud` claim.
+- `PRAETOR_JWT_JWKS_URI`: JWKS endpoint for RS256 token verification.
+- `PRAETOR_OIDC_DISCOVERY_URL`: OpenID Provider metadata endpoint; Praetor reads `jwks_uri` from it.
+- `PRAETOR_OIDC_CACHE_SECONDS`: cache window for provider metadata/key material.
 - `PRAETOR_JWT_REQUIRED_READ_ROLE`: default `viewer`.
 - `PRAETOR_JWT_REQUIRED_WRITE_ROLE`: default `operator`.
 
 Roles can come from `roles`, `role`, `groups`, `scope`, or `scp` claims. Role hierarchy is `viewer < operator < admin`.
+
+When `PRAETOR_JWT_JWKS_URI` or `PRAETOR_OIDC_DISCOVERY_URL` is set, Praetor validates RS256 signatures against the matching JWK `kid` and then enforces issuer, audience, expiry, not-before, and role checks. Without those settings, `jwt` mode falls back to the local HS256 `PRAETOR_JWT_SECRET` path for development.
 
 For internal workers and the web client, prefer:
 
