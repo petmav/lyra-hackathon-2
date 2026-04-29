@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
+import json
 from string import Formatter
 from time import perf_counter
 from typing import Any
@@ -23,6 +25,12 @@ class JsonStackResult:
     outputs: dict[str, Any]
     latency_ms: int
     error: str | None = None
+
+
+def stable_hash(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
 
 
 JSON_STACK_CATALOG: dict[str, dict[str, Any]] = {
@@ -674,6 +682,7 @@ async def call_stack(
                 "provider": spec["provider"],
                 "operation": operation_name,
                 "request": redact_request(request),
+                "request_hash": stable_hash(redact_request(request)),
                 "output_map": operation.get("output_map", {}),
             },
             _elapsed_ms(started),
@@ -689,11 +698,21 @@ async def call_stack(
                 content=request.get("content"),
             )
             response.raise_for_status()
-            payload = response.json() if response.content else {}
+            payload = response.json() if response.content else {"status": response.status_code}
     except (httpx.HTTPError, ValueError) as exc:
         return JsonStackResult(False, {"request": redact_request(request)}, _elapsed_ms(started), exc.__class__.__name__)
 
-    return JsonStackResult(True, {"response": payload}, _elapsed_ms(started))
+    mapped = apply_output_map(payload, operation.get("output_map", {}))
+    return JsonStackResult(
+        True,
+        {
+            "response": payload,
+            "mapped": mapped,
+            "response_hash": stable_hash(payload),
+            "request_hash": stable_hash(redact_request(request)),
+        },
+        _elapsed_ms(started),
+    )
 
 
 def build_request(
@@ -748,6 +767,30 @@ def redact_request(request: dict[str, Any]) -> dict[str, Any]:
     if "DD-API-KEY" in headers:
         headers["DD-API-KEY"] = "[redacted auth_ref]"
     return redacted
+
+
+def apply_output_map(payload: Any, output_map: dict[str, str] | None) -> dict[str, Any]:
+    if not output_map:
+        return {"response": payload}
+    return {key: _json_path(payload, path) for key, path in output_map.items()}
+
+
+def _json_path(payload: Any, path: str) -> Any:
+    if path == "$":
+        return payload
+    if not path.startswith("$."):
+        return None
+    value = payload
+    for part in path[2:].split("."):
+        if isinstance(value, dict):
+            value = value.get(part)
+            continue
+        if isinstance(value, list) and part.isdigit():
+            index = int(part)
+            value = value[index] if 0 <= index < len(value) else None
+            continue
+        return None
+    return value
 
 
 def _auth_headers(auth: dict[str, Any], provider: str, *, resolve: bool) -> dict[str, str]:

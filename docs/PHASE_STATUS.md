@@ -85,6 +85,8 @@ Legend:
 - ~~Remediation dispatch is now provider-neutral: approved proposed changes can route through GitHub PRs, Jira issues, Linear issues, Microsoft Graph email, Slack messages, or ServiceNow records using the JSON Stack hook layer.~~
 - ~~Effectful live hook calls now enforce an approval marker, and proposed-change dispatch requires both approval and a sandbox run before non-dry-run external writes.~~
 - ~~User-provided JSON Stack manifests now persist as first-class production `hook` records with JSONB config, validation, detail reads, previews, and hook-call execution.~~
+- ~~Hook calls now carry stable idempotency keys; non-dry-run repeated external writes replay a previous successful call instead of dispatching again.~~
+- ~~JSON Stack live responses now evaluate operation `output_map` fields into normalized mapped outputs with request/response hashes.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -110,7 +112,7 @@ Legend:
 - ~~Production stream service writes events to Redis Streams when `PRAETOR_DATA_MODE=production`.~~
 - ~~WebSocket streaming verified against the live Docker stack.~~
 - ~~Partial: real outbound remediation dispatch path exists through JSON Stack hooks, with GitHub PR as one destination among ticketing, messaging, email, and GRC systems.~~
-- Open: provider-specific response mapping/idempotency for live dispatch results after upstream APIs return.
+- ~~Provider-specific response mapping/idempotency for live dispatch results exists at the hook layer through JSON Stack `output_map` evaluation and `HookCall.idempotency_key`.~~
 - ~~Signed audit packet artifacts include PDF output, JSON sidecar, packet hash, and Ed25519 signature.~~
 
 ## Phase 1 - Bootstrap
@@ -244,12 +246,11 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add provider-specific response mapping/idempotency for live remediation dispatch results.
-2. Add UI forms for importing OpenAPI and converting selected operations into JSON Stack manifests.
-3. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
-4. Add provider-specific model streaming support.
-5. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.
-6. Convert the checkpointed evidence consumer from persisted `agent_event` polling to Redis Streams consumer groups.
+1. Add UI forms for importing OpenAPI and converting selected operations into JSON Stack manifests.
+2. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
+3. Add provider-specific model streaming support.
+4. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.
+5. Convert the checkpointed evidence consumer from persisted `agent_event` polling to Redis Streams consumer groups.
 
 ## Update Rules For Future Work
 

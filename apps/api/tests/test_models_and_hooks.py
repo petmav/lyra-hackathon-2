@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from praetor_api.main import app
+from praetor_api.services.json_stack import apply_output_map
 
 HEADERS = {"Authorization": "Bearer dev"}
 
@@ -98,3 +99,26 @@ def test_json_stack_persist_validates_manifest_shape() -> None:
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+def test_json_stack_output_map_extracts_provider_fields() -> None:
+    payload = {
+        "html_url": "https://github.com/acme/repo/pull/7",
+        "number": 7,
+        "data": {"issueCreate": {"success": True, "issue": {"url": "https://linear.app/issue/ENG-1"}}},
+    }
+
+    mapped = apply_output_map(
+        payload,
+        {
+            "github_url": "$.html_url",
+            "github_number": "$.number",
+            "linear_url": "$.data.issueCreate.issue.url",
+        },
+    )
+
+    assert mapped == {
+        "github_url": "https://github.com/acme/repo/pull/7",
+        "github_number": 7,
+        "linear_url": "https://linear.app/issue/ENG-1",
+    }

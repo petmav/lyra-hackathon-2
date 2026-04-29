@@ -18,6 +18,7 @@ class HookCall(Base):
     inputs_redacted: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     outputs_redacted: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     errors: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
     policy_decision_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)

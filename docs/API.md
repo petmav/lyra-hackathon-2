@@ -80,6 +80,7 @@ The MCP adapter now attempts JSON-RPC-style `initialize`, `tools/list`, `resourc
 For `kind=json_stack` hooks, production mode uses the proprietary JSON Hook Stack renderer. Dry-run previews are safe by default and redact `auth_ref` material.
 Non-dry-run JSON Stack calls resolve `auth_ref` values from environment variables and fail with `missing-secret` when the required token is absent. No secret values are returned by the API.
 Effectful non-dry-run production calls to external hooks require an approval marker. Direct `POST /hooks/{hook_id}:call` requests can pass `effect_approved: true`; proposed-change dispatch sets that marker only after the change has passed sandbox replay and has been approved.
+Hook calls return an `idempotency_key`. Non-dry-run calls with the same hook, operation, scope, and input hash replay the previous successful `HookCall` instead of sending a second external write; callers can also pass an explicit `idempotency_key` in service code. JSON Stack live responses include provider-specific mapped fields under `outputs_redacted.mapped` when an operation declares `output_map`.
 
 Persist a custom internal system:
 

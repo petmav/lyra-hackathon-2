@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from praetor_api.models.hook import Hook
 from praetor_api.models.hook_call import HookCall
 from praetor_api.services import mcp_client
-from praetor_api.services.json_stack import call_stack, get_stack, validate_stack
+from praetor_api.services.json_stack import call_stack, get_stack, stable_hash, validate_stack
 from praetor_api.services.hooks import HOOKS, simulate_hook_outputs
 
 HOOK_URN_PREFIX = "urn:praetor:hook:"
@@ -59,6 +59,7 @@ def _call_row_to_api(row: HookCall, hook: Hook | None = None) -> dict[str, Any]:
         "hook_id": hook_id,
         "operation": inputs.get("operation", "unknown"),
         "direction": row.direction,
+        "idempotency_key": row.idempotency_key,
         "inputs_redacted": inputs.get("payload", inputs),
         "outputs_redacted": outputs,
         "status": row.status,
@@ -217,12 +218,25 @@ async def call_hook(
     workflow_run_id: UUID | None = None,
     step_run_id: UUID | None = None,
     policy_decision_id: UUID | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     hook = await _find_hook(session, hook_id)
     if hook is None:
         raise KeyError(hook_id)
     if hook.effect_radius in EFFECTFUL_RADII and not dry_run and not effect_approved:
         raise EffectGatedError(hook_id, hook.effect_radius)
+
+    computed_idempotency_key = idempotency_key or _idempotency_key(
+        hook_id,
+        operation,
+        inputs,
+        workflow_run_id,
+        step_run_id,
+    )
+    if not dry_run:
+        existing = await _existing_successful_call(session, hook.id, computed_idempotency_key)
+        if existing is not None:
+            return _call_row_to_api(existing, hook) | {"idempotent_replay": True}
 
     errors: list[str] = []
     if hook.kind == "json_stack":
@@ -259,6 +273,7 @@ async def call_hook(
         },
         outputs_redacted=outputs,
         status=status,
+        idempotency_key=computed_idempotency_key,
         latency_ms=latency_ms,
         errors=errors,
         policy_decision_id=policy_decision_id,
@@ -294,3 +309,37 @@ def _hook_json_stack_spec(hook: Hook) -> dict[str, Any] | None:
     if isinstance(custom, dict):
         return deepcopy(custom)
     return get_stack(_hook_id_from_urn(hook.urn))
+
+
+async def _existing_successful_call(
+    session: AsyncSession,
+    hook_id: UUID,
+    idempotency_key: str,
+) -> HookCall | None:
+    return await session.scalar(
+        select(HookCall)
+        .where(
+            HookCall.hook_id == hook_id,
+            HookCall.idempotency_key == idempotency_key,
+            HookCall.status == "succeeded",
+        )
+        .order_by(HookCall.id.desc())
+        .limit(1)
+    )
+
+
+def _idempotency_key(
+    hook_id: str,
+    operation: str,
+    inputs: dict[str, Any],
+    workflow_run_id: UUID | None,
+    step_run_id: UUID | None,
+) -> str:
+    scope = {
+        "hook_id": hook_id,
+        "operation": operation,
+        "workflow_run_id": str(workflow_run_id) if workflow_run_id else None,
+        "step_run_id": str(step_run_id) if step_run_id else None,
+        "inputs_hash": stable_hash(inputs),
+    }
+    return f"hkidem_{stable_hash(scope)[:32]}"

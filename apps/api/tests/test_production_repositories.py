@@ -218,6 +218,7 @@ async def test_production_hooks_and_corpus_persist() -> None:
         )
 
     assert preview["outputs_redacted"]["provider"] == "linear"
+    assert preview["idempotency_key"].startswith("hkidem_")
 
     custom_spec = {
         "id": "internal_ticketing_test",
@@ -261,6 +262,30 @@ async def test_production_hooks_and_corpus_persist() -> None:
 
     assert custom_call["status"] == "succeeded"
     assert custom_call["outputs_redacted"]["provider"] == "internal_ticketing"
+
+    async with AsyncSessionLocal() as session:
+        first_live = await production_hooks.call_hook(
+            session,
+            "github_stub",
+            "open_pr",
+            {"branch": "praetor/idempotency-test"},
+            dry_run=False,
+            effect_approved=True,
+            idempotency_key="test-live-replay-key",
+        )
+        second_live = await production_hooks.call_hook(
+            session,
+            "github_stub",
+            "open_pr",
+            {"branch": "praetor/idempotency-test"},
+            dry_run=False,
+            effect_approved=True,
+            idempotency_key="test-live-replay-key",
+        )
+
+    assert first_live["status"] == "succeeded"
+    assert second_live["id"] == first_live["id"]
+    assert second_live["idempotent_replay"] is True
 
     async with AsyncSessionLocal() as session:
         doc = await production_corpus.ingest_document(
