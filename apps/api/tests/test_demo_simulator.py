@@ -260,3 +260,177 @@ async def test_tick_run_marks_run_failed_when_a_step_raises() -> None:
     run = demo_workflows.RUNS[run_id]
     assert run["status"] == "failed"
     assert any(e["type"] == "workflow.run.failed" for e in EVENTS if e["workflow_run_id"] == run_id)
+
+
+import json
+from urllib.error import URLError
+
+
+@pytest.mark.asyncio
+async def test_live_agent_step_uses_openai_findings_when_key_set(monkeypatch) -> None:
+    captured_url: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self) -> bytes:
+            return self._body
+
+    def fake_urlopen(request, timeout=30):
+        captured_url.append(request.full_url)
+        body = json.dumps(
+            {
+                "output_text": "```json\n"
+                + json.dumps(
+                    {
+                        "thinking": "Reviewed the repo. send_email lacks recipient validation.",
+                        "findings": [
+                            {
+                                "id": "fnd_live_1",
+                                "title": "Live: missing domain guard",
+                                "description": "send_email accepts any recipient.",
+                                "severity": "high",
+                                "confidence": 0.9,
+                                "obligations_cited": [],
+                                "documents_cited": [],
+                            }
+                        ],
+                    }
+                )
+                + "\n```",
+            }
+        ).encode()
+        return FakeResponse(body)
+
+    monkeypatch.setattr("praetor_api.services.demo_simulator.urlopen", fake_urlopen)
+
+    fallback_finding = {
+        "id": "fnd_scripted",
+        "title": "Scripted",
+        "severity": "low",
+        "confidence": 0.5,
+        "obligations_cited": [],
+        "documents_cited": [],
+        "status": "open",
+    }
+    script = ScriptedRun(
+        workflow_id="code_compliance_scan_full",
+        asset_id="asset_full",
+        steps=(
+            ScriptedStep(
+                step_id="scan",
+                step_type="agent",
+                events=(
+                    ScriptedEvent(type="agent.thought", actor="workflow_agent", payload={"text": "fallback"}),
+                ),
+                final_outputs={"findings": [fallback_finding]},
+                findings=(fallback_finding,),
+                is_live_agent=True,
+            ),
+        ),
+    )
+    run_id = _seed_run(script)
+
+    await tick_run(run_id, script=script, sleep=_instant, openai_api_key="sk-test")
+
+    assert "api.openai.com" in captured_url[0]
+    run = demo_workflows.RUNS[run_id]
+    titles = [f["title"] for f in run["outputs"]["findings"]]
+    assert "Live: missing domain guard" in titles
+    assert "Scripted" not in titles
+
+    thoughts = [
+        e for e in EVENTS
+        if e["workflow_run_id"] == run_id and e["type"] == "agent.thought"
+    ]
+    assert any("Reviewed the repo" in str(t["payload"].get("text", "")) for t in thoughts)
+
+
+@pytest.mark.asyncio
+async def test_live_agent_step_falls_back_to_scripted_when_openai_errors(monkeypatch) -> None:
+    def fake_urlopen(request, timeout=30):
+        raise URLError("network down")
+
+    monkeypatch.setattr("praetor_api.services.demo_simulator.urlopen", fake_urlopen)
+
+    fallback_finding = {
+        "id": "fnd_scripted",
+        "title": "Scripted",
+        "severity": "low",
+        "confidence": 0.5,
+        "obligations_cited": [],
+        "documents_cited": [],
+        "status": "open",
+    }
+    script = ScriptedRun(
+        workflow_id="code_compliance_scan_full",
+        asset_id="asset_full",
+        steps=(
+            ScriptedStep(
+                step_id="scan",
+                step_type="agent",
+                events=(
+                    ScriptedEvent(type="agent.thought", actor="workflow_agent", payload={"text": "scripted-thinking"}),
+                ),
+                final_outputs={"findings": [fallback_finding]},
+                findings=(fallback_finding,),
+                is_live_agent=True,
+            ),
+        ),
+    )
+    run_id = _seed_run(script)
+
+    await tick_run(run_id, script=script, sleep=_instant, openai_api_key="sk-test")
+
+    run = demo_workflows.RUNS[run_id]
+    assert run["status"] == "succeeded"
+    titles = [f["title"] for f in run["outputs"]["findings"]]
+    assert titles == ["Scripted"]
+
+
+@pytest.mark.asyncio
+async def test_live_agent_step_skipped_when_no_key(monkeypatch) -> None:
+    def must_not_call(request, timeout=30):
+        raise AssertionError("openai must not be called when key is None")
+
+    monkeypatch.setattr("praetor_api.services.demo_simulator.urlopen", must_not_call)
+
+    fallback_finding = {
+        "id": "fnd_scripted",
+        "title": "Scripted",
+        "severity": "low",
+        "confidence": 0.5,
+        "obligations_cited": [],
+        "documents_cited": [],
+        "status": "open",
+    }
+    script = ScriptedRun(
+        workflow_id="code_compliance_scan_full",
+        asset_id="asset_full",
+        steps=(
+            ScriptedStep(
+                step_id="scan",
+                step_type="agent",
+                events=(
+                    ScriptedEvent(type="agent.thought", actor="workflow_agent", payload={"text": "scripted-thinking"}),
+                ),
+                final_outputs={"findings": [fallback_finding]},
+                findings=(fallback_finding,),
+                is_live_agent=True,
+            ),
+        ),
+    )
+    run_id = _seed_run(script)
+
+    await tick_run(run_id, script=script, sleep=_instant, openai_api_key=None)
+
+    run = demo_workflows.RUNS[run_id]
+    titles = [f["title"] for f in run["outputs"]["findings"]]
+    assert titles == ["Scripted"]
