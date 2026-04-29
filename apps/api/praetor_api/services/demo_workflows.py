@@ -6,25 +6,80 @@ from praetor_api.services.event_stream import append_event, make_event
 
 RUNS: dict[str, dict[str, Any]] = {}
 
-CODE_COMPLIANCE_SCAN = {
-    "id": "code_compliance_scan",
-    "urn": "urn:praetor:workflow:demo:code-compliance-scan",
-    "name": "code_compliance_scan",
-    "description": "Pull a repository, scan send_email controls, and emit a finding.",
-    "definition": "pull -> scan -> emit",
-    "trigger": "manual",
-    "required_hooks": ["github_stub"],
-    "required_corpora": ["iso_42001", "internal_data_min"],
-}
+WORKFLOWS: list[dict[str, Any]] = [
+    {
+        "id": "code_compliance_scan",
+        "urn": "urn:praetor:workflow:demo:code-compliance-scan",
+        "name": "code_compliance_scan",
+        "description": "Pull a repository, scan controls, and emit a finding.",
+        "definition": "pull -> retrieve_controls -> scan -> emit",
+        "trigger": "manual",
+        "required_hooks": ["github_stub"],
+        "required_corpora": ["iso_42001", "internal_data_min"],
+    },
+    {
+        "id": "code_compliance_scan_full",
+        "urn": "urn:praetor:workflow:demo:code-compliance-scan-full",
+        "name": "code_compliance_scan_full",
+        "description": "Full code compliance scan with sandboxed remediation PR.",
+        "definition": "pull -> retrieve_controls -> scan -> emit -> propose -> policy_gate -> human_gate -> open_pr",
+        "trigger": "manual",
+        "required_hooks": ["github_stub"],
+        "required_corpora": ["iso_42001", "internal_data_min"],
+    },
+    {
+        "id": "vendor_risk_review",
+        "urn": "urn:praetor:workflow:demo:vendor-risk-review",
+        "name": "vendor_risk_review",
+        "description": "SOC2/ISO gap analysis on a vendor attestation, with remediation proposal.",
+        "definition": "load_attestation -> retrieve_obligations -> analyze -> emit -> propose_remediation",
+        "trigger": "manual",
+        "required_hooks": ["github_stub"],
+        "required_corpora": ["iso_42001"],
+    },
+    {
+        "id": "policy_gap_analysis",
+        "urn": "urn:praetor:workflow:demo:policy-gap-analysis",
+        "name": "policy_gap_analysis",
+        "description": "Onboard a new regulation and propose new control text.",
+        "definition": "load_regulation -> retrieve_existing_controls -> analyze_gaps -> emit -> propose_controls -> policy_gate -> human_gate",
+        "trigger": "manual",
+        "required_hooks": [],
+        "required_corpora": ["iso_42001", "internal_data_min"],
+    },
+    {
+        "id": "evidence_collection",
+        "urn": "urn:praetor:workflow:demo:evidence-collection",
+        "name": "evidence_collection",
+        "description": "Sweep source systems, organise candidates, bind to obligations.",
+        "definition": "read_files -> retrieve_obligations -> organize -> emit",
+        "trigger": "manual",
+        "required_hooks": ["github_stub"],
+        "required_corpora": ["iso_42001"],
+    },
+    {
+        "id": "ai_system_intake",
+        "urn": "urn:praetor:workflow:demo:ai-system-intake",
+        "name": "ai_system_intake",
+        "description": "Classify a newly-registered AI system and gate the tier.",
+        "definition": "intake_form -> retrieve_obligations -> classify -> policy_gate -> emit",
+        "trigger": "manual",
+        "required_hooks": [],
+        "required_corpora": ["iso_42001"],
+    },
+]
+
+CODE_COMPLIANCE_SCAN = WORKFLOWS[0]
 
 
 def list_workflows() -> list[dict[str, Any]]:
-    return [CODE_COMPLIANCE_SCAN]
+    return list(WORKFLOWS)
 
 
 def get_workflow(workflow_id: str) -> dict[str, Any] | None:
-    if workflow_id in {CODE_COMPLIANCE_SCAN["id"], CODE_COMPLIANCE_SCAN["urn"]}:
-        return CODE_COMPLIANCE_SCAN
+    for wf in WORKFLOWS:
+        if workflow_id in {wf["id"], wf["urn"]}:
+            return wf
     return None
 
 
