@@ -4,7 +4,7 @@ import { use, useEffect, useState } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { Asset, Finding, ProposedChange, StepRun, WorkflowRun } from "@/lib/api/types";
+import type { Asset, Finding, ProposedChange, StepRun, Workflow, WorkflowRun } from "@/lib/api/types";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { Section } from "@/components/primitives/Section";
 import { Badge } from "@/components/primitives/Badge";
@@ -42,6 +42,7 @@ import { ProposedChangeView } from "@/components/proposed-change/ProposedChangeV
 export default function WorkflowRunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [run, setRun] = useState<WorkflowRun | null>(null);
+  const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [proposals, setProposals] = useState<ProposedChange[]>([]);
   const [workflowAgent, setWorkflowAgent] = useState<Asset | null>(null);
@@ -58,16 +59,19 @@ export default function WorkflowRunPage({ params }: { params: Promise<{ id: stri
       api.proposedChanges.list(),
       api.assets.get("asset_wfa_scan"),
       api.assets.get("asset_support_bot")
-    ]).then(([r, f, p, wfa, prod]) => {
+    ]).then(async ([r, f, p, wfa, prod]) => {
       if (!alive) return;
       setRun(r);
       setFindings(f);
       setProposals(p.filter((pc) => f.some((ff) => ff.id === pc.finding_id)));
       setWorkflowAgent(wfa);
       setProductionAgent(prod);
-      // default the active step to the running one
       const running = r?.step_runs.find((s) => s.status === "running");
       setActiveStepId(running?.step_id);
+      if (r?.workflow_id) {
+        const wf = await api.workflows.get(r.workflow_id).catch(() => null);
+        if (alive) setWorkflow(wf);
+      }
       setLoading(false);
     });
     return () => { alive = false; };
@@ -157,6 +161,7 @@ export default function WorkflowRunPage({ params }: { params: Promise<{ id: stri
       <StepDrawer
         step={activeStep}
         run={run}
+        workflow={workflow}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
       />

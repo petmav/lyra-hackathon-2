@@ -1,6 +1,6 @@
 "use client";
 
-import type { AgentEvent, StepRun, WorkflowRun } from "@/lib/api/types";
+import type { AgentEvent, StepRun, Workflow, WorkflowGraphNode, WorkflowRun } from "@/lib/api/types";
 import { Drawer } from "@/components/primitives/Drawer";
 import { Badge } from "@/components/primitives/Badge";
 import { AgentDetail } from "@/components/agent-detail/AgentDetail";
@@ -11,11 +11,13 @@ import { Timestamp } from "@/components/data/Timestamp";
 export function StepDrawer({
   step,
   run,
+  workflow,
   open,
   onClose
 }: {
   step: StepRun | null;
   run: WorkflowRun;
+  workflow?: Workflow | null;
   open: boolean;
   onClose: () => void;
 }) {
@@ -24,18 +26,21 @@ export function StepDrawer({
   const stepEvents = step ? events.filter((e) => e.workflow_step_id === step.step_id) : [];
   const wfaAssetId = workflowAgentAssetId(step);
   const wfaAssetUrn = workflowAgentAssetUrn(step, run.id);
+  const definition = step ? findStepDefinition(workflow, step) : null;
 
   return (
     <Drawer
       open={open}
       onClose={onClose}
       width={isAgent ? "xl" : "wide"}
-      subtitle={`Step - ${step?.step_type ?? "-"}`}
+      subtitle={`Step · ${step?.step_type ?? "—"}`}
       title={step ? <span className="font-mono">{step.step_id}</span> : "Step"}
     >
       {step && (
         <div className="px-6 py-5">
           <Meta step={step} run={run} />
+          <Hairline className="my-6" />
+          <StepDefinition step={step} definition={definition} />
           <Hairline className="my-6" />
           <StepTrace step={step} events={stepEvents} connected={connected} />
           <Hairline className="my-6" />
@@ -48,6 +53,101 @@ export function StepDrawer({
       )}
     </Drawer>
   );
+}
+
+function findStepDefinition(workflow: Workflow | null | undefined, step: StepRun): WorkflowGraphNode | null {
+  if (!workflow) return null;
+  const fromGraph = workflow.graph?.nodes?.find((n) => n.id === step.step_id);
+  if (fromGraph) return fromGraph;
+  const fromSteps = workflow.steps?.find((s) => s.id === step.step_id);
+  if (!fromSteps) return null;
+  return {
+    id: fromSteps.id,
+    type: fromSteps.type,
+    phase: (fromSteps.phase ?? "pre"),
+    label: fromSteps.label ?? fromSteps.id,
+    config: (fromSteps.with ?? {}) as Record<string, unknown>,
+    depends_on: fromSteps.depends_on,
+    position: { x: 0, y: 0 }
+  };
+}
+
+const PHASE_TONE: Record<"pre" | "assess" | "post", "info" | "gold" | "warn"> = {
+  pre: "info",
+  assess: "gold",
+  post: "warn"
+};
+
+function StepDefinition({ step, definition }: { step: StepRun; definition: WorkflowGraphNode | null }) {
+  const dependsOn = definition?.depends_on?.length ? definition.depends_on : step.depends_on;
+  const config = definition?.config ?? {};
+  const configEntries = Object.entries(config).filter(([, v]) => v !== undefined && v !== null && v !== "");
+  return (
+    <section>
+      <div className="mb-3">
+        <div className="smallcaps">Definition</div>
+        <div className="mt-1 text-[12px] text-paper-dim">
+          The static shape of this step, as defined in the workflow graph.
+        </div>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+        <Field label="Type">
+          <span className="font-mono text-paper">{step.step_type}</span>
+        </Field>
+        {definition && (
+          <Field label="Phase">
+            <Badge tone={PHASE_TONE[definition.phase]}>{definition.phase}</Badge>
+          </Field>
+        )}
+        {definition?.label && definition.label !== step.step_id && (
+          <Field label="Label">
+            <span className="text-paper">{definition.label}</span>
+          </Field>
+        )}
+        <Field label="Depends on">
+          {dependsOn && dependsOn.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {dependsOn.map((id) => (
+                <span key={id} className="font-mono text-[11.5px] text-paper-dim border border-rule rounded-sm px-1.5 py-0.5">
+                  {id}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="text-paper-fade">none</span>
+          )}
+        </Field>
+      </dl>
+      <div className="mt-4">
+        <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-paper-fade mb-1.5">
+          Configuration
+        </div>
+        {configEntries.length === 0 ? (
+          <div className="text-[12px] text-paper-fade italic">
+            {definition
+              ? "No configuration was set on this step in the workflow definition."
+              : "Workflow definition not available — showing runtime data only."}
+          </div>
+        ) : (
+          <ul className="border border-rule rounded-sm divide-y divide-rule">
+            {configEntries.map(([key, value]) => (
+              <li key={key} className="flex items-baseline gap-3 px-3 py-2 text-[12px]">
+                <span className="font-mono text-paper-fade w-32 shrink-0 truncate">{key}</span>
+                <span className="font-mono text-paper-dim break-all flex-1">{formatConfigValue(value)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function formatConfigValue(value: unknown): string {
+  if (Array.isArray(value)) return value.length === 0 ? "[]" : `[${value.join(", ")}]`;
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function AgentForStep({
@@ -78,7 +178,8 @@ function AgentForStep({
 }
 
 function StepTrace({ step, events, connected }: { step: StepRun; events: AgentEvent[]; connected: boolean }) {
-  const traceEvents = events.length > 0 ? events : fallbackEvents(step);
+  const isPending = step.status === "pending";
+  const traceEvents = events.length > 0 ? events : (isPending ? [] : fallbackEvents(step));
   return (
     <section>
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -90,6 +191,11 @@ function StepTrace({ step, events, connected }: { step: StepRun; events: AgentEv
         </div>
         <Badge tone={connected ? "ok" : "muted"}>{connected ? "stream connected" : "history"}</Badge>
       </div>
+      {traceEvents.length === 0 && (
+        <div className="border border-rule rounded-sm px-4 py-4 text-[12px] text-paper-fade italic">
+          No runtime events yet. Events will stream in as the step executes.
+        </div>
+      )}
       <ol className="border-l border-rule">
         {traceEvents.map((event, index) => {
           const entry = traceEntry(event);
@@ -112,35 +218,57 @@ function StepTrace({ step, events, connected }: { step: StepRun; events: AgentEv
 }
 
 function NonAgentBody({ step }: { step: StepRun }) {
+  const hasInputs = isNonEmpty(step.inputs_redacted);
+  const hasOutputs = isNonEmpty(step.outputs_redacted);
+  const isPending = step.status === "pending";
+  const refRows = [
+    step.sandbox_run_id && { label: "Sandbox run", value: step.sandbox_run_id },
+    step.hook_call_id && { label: "Hook call", value: step.hook_call_id },
+    step.policy_decision_id && { label: "Policy decision", value: step.policy_decision_id },
+    step.approval_id && { label: "Approval", value: step.approval_id }
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+
   return (
-    <div className="grid gap-6">
-      <Field label="Step type">
-        <span className="font-mono text-paper">{step.step_type}</span>
-      </Field>
-      {step.sandbox_run_id && (
-        <Field label="Sandbox run">
-          <span className="font-mono text-paper-dim">{step.sandbox_run_id}</span>
-        </Field>
+    <section>
+      <div className="mb-3">
+        <div className="smallcaps">Runtime data</div>
+        <div className="mt-1 text-[12px] text-paper-dim">
+          Inputs, outputs, and downstream references captured during execution.
+        </div>
+      </div>
+
+      {isPending && !hasInputs && !hasOutputs && refRows.length === 0 ? (
+        <div className="border border-rule rounded-sm px-4 py-6 text-center">
+          <div className="text-[13px] text-paper">This step hasn't run yet.</div>
+          <div className="mt-1 text-[12px] text-paper-fade">
+            Inputs, outputs, and trace events will populate when the run reaches it.
+            See <span className="font-mono">Definition</span> above for the configured shape.
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-5">
+          {refRows.length > 0 && (
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+              {refRows.map((row) => (
+                <Field key={row.label} label={row.label}>
+                  <span className="font-mono text-paper-dim">{row.value}</span>
+                </Field>
+              ))}
+            </dl>
+          )}
+          <JsonField label="Inputs (redacted)" value={step.inputs_redacted} hasContent={hasInputs} />
+          <JsonField label="Outputs (redacted)" value={step.outputs_redacted} hasContent={hasOutputs} />
+        </div>
       )}
-      {step.hook_call_id && (
-        <Field label="Hook call">
-          <span className="font-mono text-paper-dim">{step.hook_call_id}</span>
-        </Field>
-      )}
-      {step.policy_decision_id && (
-        <Field label="Policy decision">
-          <span className="font-mono text-paper-dim">{step.policy_decision_id}</span>
-        </Field>
-      )}
-      {step.approval_id && (
-        <Field label="Approval">
-          <span className="font-mono text-paper-dim">{step.approval_id}</span>
-        </Field>
-      )}
-      <JsonField label="Inputs (redacted)" value={step.inputs_redacted} />
-      <JsonField label="Outputs (redacted)" value={step.outputs_redacted} />
-    </div>
+    </section>
   );
+}
+
+function isNonEmpty(value: unknown): boolean {
+  if (!value) return false;
+  if (typeof value !== "object") return true;
+  if (Array.isArray(value)) return value.length > 0;
+  return Object.keys(value as Record<string, unknown>).length > 0;
 }
 
 function Meta({ step, run }: { step: StepRun; run: WorkflowRun }) {
@@ -162,12 +290,16 @@ function Meta({ step, run }: { step: StepRun; run: WorkflowRun }) {
   );
 }
 
-function JsonField({ label, value }: { label: string; value: unknown }) {
+function JsonField({ label, value, hasContent }: { label: string; value: unknown; hasContent: boolean }) {
   return (
     <Field label={label}>
-      <pre className="font-mono text-[12px] text-paper-dim whitespace-pre-wrap break-words border-l border-rule pl-3">
-        {JSON.stringify(value ?? {}, null, 2)}
-      </pre>
+      {hasContent ? (
+        <pre className="font-mono text-[12px] text-paper-dim whitespace-pre-wrap break-words border-l border-rule pl-3">
+          {JSON.stringify(value, null, 2)}
+        </pre>
+      ) : (
+        <span className="text-[12px] text-paper-fade italic">Not captured for this step.</span>
+      )}
     </Field>
   );
 }
