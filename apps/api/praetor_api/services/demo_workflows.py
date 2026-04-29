@@ -94,30 +94,7 @@ async def run_code_compliance_scan(
         )
     )
     for step in run["step_runs"]:
-        await append_event(
-            make_event(
-                asset_id=asset_id,
-                workflow_run_id=run_id,
-                workflow_step_id=step["step_id"],
-                event_type="workflow.step.finished",
-                actor="workflow_runtime",
-                payload={
-                    "step_id": step["step_id"],
-                    "step_type": step["step_type"],
-                    "status": step["status"],
-                    "outputs_redacted": step["outputs_redacted"],
-                },
-            )
-        )
-    await append_event(
-        make_event(
-            asset_id=asset_id,
-            workflow_run_id=run_id,
-            event_type="finding.emitted",
-            actor="workflow_runtime",
-            payload={"finding": finding},
-        )
-    )
+        await _append_step_trace(asset_id, run_id, step)
     await append_event(
         make_event(
             asset_id=asset_id,
@@ -128,3 +105,85 @@ async def run_code_compliance_scan(
         )
     )
     return run
+
+
+async def _append_step_trace(asset_id: str, run_id: str, step: dict[str, Any]) -> None:
+    await append_event(
+        make_event(
+            asset_id=asset_id,
+            workflow_run_id=run_id,
+            workflow_step_id=step["step_id"],
+            event_type="workflow.step.started",
+            actor="workflow_runtime",
+            payload={
+                "step_id": step["step_id"],
+                "step_type": step["step_type"],
+                "status": "running",
+            },
+        )
+    )
+    for event_type, actor, payload in _demo_step_trace_events(step):
+        await append_event(
+            make_event(
+                asset_id=asset_id,
+                workflow_run_id=run_id,
+                workflow_step_id=step["step_id"],
+                event_type=event_type,
+                actor=actor,
+                payload=payload | {"step_id": step["step_id"], "step_type": step["step_type"]},
+            )
+        )
+    await append_event(
+        make_event(
+            asset_id=asset_id,
+            workflow_run_id=run_id,
+            workflow_step_id=step["step_id"],
+            event_type="workflow.step.finished",
+            actor="workflow_runtime",
+            payload={
+                "step_id": step["step_id"],
+                "step_type": step["step_type"],
+                "status": step["status"],
+                "outputs_redacted": step["outputs_redacted"],
+            },
+        )
+    )
+
+
+def _demo_step_trace_events(step: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    outputs = step.get("outputs_redacted") or {}
+    if step["step_type"] == "hook.in":
+        return [
+            (
+                "hook.in.called",
+                "praetor:hooks",
+                {"repo_url": outputs.get("repo_url"), "summary": "Loaded source artefacts through the inbound hook."},
+            )
+        ]
+    if step["step_type"] == "agent":
+        findings = outputs.get("findings", [])
+        return [
+            (
+                "agent.thought",
+                "workflow_agent",
+                {
+                    "text": "Reviewed source artefacts and policy obligations; produced structured findings.",
+                    "findings_count": len(findings) if isinstance(findings, list) else 0,
+                },
+            ),
+            (
+                "agent.tool.called",
+                "workflow_agent",
+                {"name": "emit_finding", "status": "ok", "items": len(findings) if isinstance(findings, list) else 0},
+            ),
+        ]
+    if step["step_type"] == "finding.emit":
+        emitted = outputs.get("emitted") or []
+        if not emitted and "count" in outputs:
+            emitted = [{"count": outputs["count"]}]
+        return [
+            ("finding.emitted", "workflow_runtime", {"finding": item})
+            for item in emitted
+            if isinstance(item, dict)
+        ]
+    return []

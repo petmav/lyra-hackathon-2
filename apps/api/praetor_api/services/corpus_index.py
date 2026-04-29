@@ -24,6 +24,20 @@ class Document:
 
 
 CORPORA: dict[str, dict[str, Any]] = {
+    "eu_ai_act": {
+        "id": "eu_ai_act",
+        "name": "EU AI Act governance excerpts",
+        "kind": "regulation",
+        "version": "2026.04",
+        "document_count": 0,
+    },
+    "gdpr": {
+        "id": "gdpr",
+        "name": "GDPR data protection excerpts",
+        "kind": "regulation",
+        "version": "2026.04",
+        "document_count": 0,
+    },
     "internal_data_min": {
         "id": "internal_data_min",
         "name": "Internal data minimisation policy",
@@ -34,6 +48,13 @@ CORPORA: dict[str, dict[str, Any]] = {
     "iso_42001": {
         "id": "iso_42001",
         "name": "ISO 42001 excerpt",
+        "kind": "standard",
+        "version": "2026.04",
+        "document_count": 0,
+    },
+    "owasp_agent": {
+        "id": "owasp_agent",
+        "name": "OWASP agentic application risk excerpts",
         "kind": "standard",
         "version": "2026.04",
         "document_count": 0,

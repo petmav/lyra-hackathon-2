@@ -78,6 +78,10 @@ Legend:
 - ~~Queued workflow execution mode exists: `PRAETOR_WORKFLOW_EXECUTION_MODE=queued` persists runs as queued, `POST /workflow-runs:drain` processes them, and the Compose `workflow` service now runs the drain loop.~~
 - ~~Postgres integration tests cover queued workflow drain execution: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`3 passed`).~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
+- ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
+- ~~Production workflow events now persist step-start, semantic step trace events, and step-finished records for each workflow step without exposing private chain-of-thought.~~
+- ~~Production corpus seeding now idempotently ingests all five bundled corpus markdown documents into Postgres-backed `document` and `document_chunk` rows.~~
+- ~~Production obligations now hydrate idempotently from bundled YAML files, with Docker-package fallback content and demo static fallback.~~
 - ~~Partial: the Compose `workflow` worker periodically invokes `POST /evidence-records:sweep`, so evidence materialization no longer depends only on frontend/API reads.~~
 - ~~Persisted event reads now reconstruct ordering from hash-chain links, avoiding same-transaction timestamp ordering failures.~~
 - Open: replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
@@ -162,9 +166,10 @@ Legend:
 - ~~Partial: Task 3.4 sandbox log streaming endpoint and hardened default Docker isolation profile exist.~~
 - Open: Task 3.4 live log tailing while the container is still running and stronger host-level isolation such as gVisor/seccomp profiles.
 - ~~Partial: backend corpus storage persists ingested documents and chunks for seeded corpus IDs.~~
-- Open: Task 3.8 all five seed corpora ingested into backend storage.
+- ~~Task 3.8 all five seed corpora now ingest into backend storage from bundled markdown seed files.~~
 - ~~Partial: production `code_compliance_scan` writes workflow and step events to `agent_event` with hash-chain continuity.~~
 - ~~Runtime events and hash-chain writes are covered for every production workflow template path.~~
+- ~~Runtime events now include per-step semantic trace records for hooks, corpus queries, agent execution, sandbox execution, policy gates, approvals, findings, proposals, and outbound hooks.~~
 - Open: runtime events and hash-chain writes for non-workflow agent actions.
 
 ## Phase 4 - Evidence, Audit Packet, Polish
@@ -182,7 +187,7 @@ Legend:
 - ~~PDF artifact output exists for generated audit packets.~~
 - ~~JSON sidecar output.~~
 - ~~External audit-packet verification CLI exists: `npm run verify:audit -- <json-sidecar> --signature <signature>`.~~
-- Open: backend obligation hydration from YAML.
+- ~~Backend obligation hydration from YAML now loads bundled obligation libraries into production Postgres and serves them through `/obligations`.~~
 
 ## Phase 5 - Demo Prep
 

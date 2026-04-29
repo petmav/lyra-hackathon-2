@@ -797,32 +797,13 @@ async def _publish_run_events(
         payload={"workflow_id": run["workflow_id"], "inputs": inputs},
     )
     for step in run["step_runs"]:
-        await append_persisted_event(
+        await _publish_step_trace(
             session,
-            asset_record_id=asset.id,
+            asset,
+            workflow_run,
+            run["id"],
+            step,
             asset_id=ASSET_EXTERNAL_ID,
-            workflow_run_record_id=workflow_run.id,
-            workflow_run_id=run["id"],
-            workflow_step_id=step["step_id"],
-            event_type="workflow.step.finished",
-            actor="workflow_runtime",
-            payload={
-                "step_id": step["step_id"],
-                "step_type": step["step_type"],
-                "status": step["status"],
-                "outputs_redacted": step["outputs_redacted"],
-            },
-        )
-    for finding in run["outputs"].get("findings", []):
-        await append_persisted_event(
-            session,
-            asset_record_id=asset.id,
-            asset_id=ASSET_EXTERNAL_ID,
-            workflow_run_record_id=workflow_run.id,
-            workflow_run_id=run["id"],
-            event_type="finding.emitted",
-            actor="workflow_runtime",
-            payload={"finding": finding},
         )
     await append_persisted_event(
         session,
@@ -846,22 +827,21 @@ async def _publish_resume_events(
     external_run_id = run["id"]
     asset_id = (asset.config or {}).get("external_id", ASSET_EXTERNAL_ID)
     for step in steps:
-        await append_persisted_event(
+        await _publish_step_trace(
             session,
-            asset_record_id=asset.id,
-            asset_id=asset_id,
-            workflow_run_record_id=workflow_run.id,
-            workflow_run_id=external_run_id,
-            workflow_step_id=step.step_id,
-            event_type="workflow.step.finished",
-            actor="workflow_runtime",
-            payload={
+            asset,
+            workflow_run,
+            external_run_id,
+            {
                 "step_id": step.step_id,
                 "step_type": step.step_type,
                 "status": step.status,
+                "inputs_redacted": step.inputs_redacted,
                 "outputs_redacted": step.outputs_redacted,
-                "resumed": True,
+                "sandbox_run_id": _sandbox_id(step.sandbox_run_id),
             },
+            asset_id=asset_id,
+            resumed=True,
         )
     if run["status"] in {"succeeded", "failed", "cancelled"}:
         await append_persisted_event(
@@ -874,6 +854,199 @@ async def _publish_resume_events(
             actor="workflow_runtime",
             payload={"status": run["status"], "resumed": True},
         )
+
+
+async def _publish_step_trace(
+    session: AsyncSession,
+    asset: Asset,
+    workflow_run: WorkflowRun,
+    run_id: str,
+    step: dict[str, Any],
+    *,
+    asset_id: str,
+    resumed: bool = False,
+) -> None:
+    base_payload = {
+        "step_id": step["step_id"],
+        "step_type": step["step_type"],
+        "status": step["status"],
+        "resumed": resumed,
+    }
+    await append_persisted_event(
+        session,
+        asset_record_id=asset.id,
+        asset_id=asset_id,
+        workflow_run_record_id=workflow_run.id,
+        workflow_run_id=run_id,
+        workflow_step_id=step["step_id"],
+        event_type="workflow.step.started",
+        actor="workflow_runtime",
+        payload=base_payload | {"inputs_redacted": step.get("inputs_redacted", {})},
+    )
+    for event_type, actor, payload in _step_trace_events(step):
+        await append_persisted_event(
+            session,
+            asset_record_id=asset.id,
+            asset_id=asset_id,
+            workflow_run_record_id=workflow_run.id,
+            workflow_run_id=run_id,
+            workflow_step_id=step["step_id"],
+            event_type=event_type,
+            actor=actor,
+            payload=payload | {"step_id": step["step_id"], "step_type": step["step_type"]},
+        )
+    await append_persisted_event(
+        session,
+        asset_record_id=asset.id,
+        asset_id=asset_id,
+        workflow_run_record_id=workflow_run.id,
+        workflow_run_id=run_id,
+        workflow_step_id=step["step_id"],
+        event_type="workflow.step.finished",
+        actor="workflow_runtime",
+        payload=base_payload | {"outputs_redacted": step.get("outputs_redacted", {})},
+    )
+
+
+def _step_trace_events(step: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    outputs = step.get("outputs_redacted") or {}
+    inputs = step.get("inputs_redacted") or {}
+    step_type = step.get("step_type")
+    if step_type == "hook.in":
+        return [
+            (
+                "hook.in.called",
+                "praetor:hooks",
+                {
+                    "repo_url": outputs.get("repo_url") or inputs.get("repo_url"),
+                    "files_returned": len(outputs.get("files", [])) if isinstance(outputs.get("files"), list) else 0,
+                    "summary": "Loaded source artefacts through the inbound hook.",
+                },
+            )
+        ]
+    if step_type == "corpus.query":
+        hits = outputs.get("hits", [])
+        return [
+            (
+                "corpus.query",
+                "praetor:corpus",
+                {
+                    "query": inputs.get("query"),
+                    "corpora": inputs.get("corpora", []),
+                    "chunks_returned": len(hits) if isinstance(hits, list) else 0,
+                    "top_score": hits[0].get("score") if isinstance(hits, list) and hits and isinstance(hits[0], dict) else None,
+                    "summary": "Retrieved obligation and policy context for the step.",
+                },
+            )
+        ]
+    if step_type == "agent":
+        sandbox = outputs.get("sandbox") if isinstance(outputs.get("sandbox"), dict) else {}
+        model_call = outputs.get("model_call") if isinstance(outputs.get("model_call"), dict) else {}
+        findings = outputs.get("findings", [])
+        events: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                "sandbox.launched",
+                "praetor:sandbox",
+                {
+                    "sandbox_run_id": outputs.get("sandbox_run_id"),
+                    "workflow_agent_asset_id": outputs.get("workflow_agent_asset_id"),
+                    "workflow_agent_asset_urn": outputs.get("workflow_agent_asset_urn"),
+                    "mode": sandbox.get("mode"),
+                },
+            ),
+            (
+                "agent.thought",
+                "workflow_agent",
+                {
+                    "text": "Reviewed retrieved context, source artefacts, and policy obligations; produced structured findings.",
+                    "model_provider": outputs.get("model_provider"),
+                    "model": outputs.get("model"),
+                    "model_mode": model_call.get("mode"),
+                    "findings_count": len(findings) if isinstance(findings, list) else 0,
+                },
+            ),
+            (
+                "agent.tool.called",
+                "workflow_agent",
+                {
+                    "name": "emit_finding",
+                    "status": "ok",
+                    "items": len(findings) if isinstance(findings, list) else 0,
+                    "summary": "Validated and emitted finding candidates as typed workflow output.",
+                },
+            ),
+            (
+                "sandbox.exited",
+                "praetor:sandbox",
+                {
+                    "sandbox_run_id": outputs.get("sandbox_run_id"),
+                    "exit_code": sandbox.get("exit_code"),
+                    "fallback_reason": sandbox.get("fallback_reason"),
+                },
+            ),
+        ]
+        return events
+    if step_type == "finding.emit":
+        emitted = outputs.get("emitted", [])
+        if not isinstance(emitted, list):
+            return []
+        return [
+            ("finding.emitted", "workflow_runtime", {"finding": finding})
+            for finding in emitted
+            if isinstance(finding, dict)
+        ]
+    if step_type == "change.propose":
+        proposed = outputs.get("proposed_changes", [])
+        if not isinstance(proposed, list):
+            return []
+        return [
+            ("change.proposed", "workflow_runtime", {"change": change})
+            for change in proposed
+            if isinstance(change, dict)
+        ]
+    if step_type == "gate.policy":
+        return [
+            (
+                "policy.decision.warm",
+                "praetor:policy",
+                {
+                    "outcome": outputs.get("decision"),
+                    "severity": outputs.get("severity"),
+                    "policy_set": outputs.get("policy_set"),
+                    "summary": "Evaluated workflow outputs against the configured policy gate.",
+                },
+            )
+        ]
+    if step_type == "gate.human":
+        if outputs.get("approved") is True:
+            return [
+                (
+                    "approval.decided",
+                    "praetor:approval",
+                    {"outcome": "approved", "approver": outputs.get("approver")},
+                )
+            ]
+        return [
+            (
+                "approval.requested",
+                "praetor:approval",
+                {"role_required": outputs.get("role_required") or inputs.get("role_required")},
+            )
+        ]
+    if step_type == "hook.out":
+        return [
+            (
+                "hook.out.called",
+                "praetor:hooks",
+                {
+                    "hook_id": outputs.get("hook_id"),
+                    "operation": outputs.get("operation"),
+                    "url": outputs.get("url"),
+                    "summary": "Sent approved workflow output to the outbound integration.",
+                },
+            )
+        ]
+    return []
 
 
 def _template_for(workflow_id: str) -> dict[str, Any]:

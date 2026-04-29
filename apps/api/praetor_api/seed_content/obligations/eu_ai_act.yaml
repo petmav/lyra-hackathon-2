@@ -1,0 +1,21 @@
+framework: eu_ai_act
+version: "2026.04"
+obligations:
+  - id: obl_eu_ai_act_risk_management
+    urn: urn:praetor:obligation:eu_ai_act:risk_management
+    citation: Art. 9
+    text: High-risk AI systems must operate under a documented and maintained risk management system.
+    applicability:
+      asset_types: [agent, workflow_agent, ai_system]
+      jurisdictions: [EU]
+      high_risk: true
+    severity_default: block
+  - id: obl_eu_ai_act_human_oversight
+    urn: urn:praetor:obligation:eu_ai_act:human_oversight
+    citation: Art. 14
+    text: High-risk AI systems must support effective human oversight before consequential action.
+    applicability:
+      asset_types: [agent, workflow_agent, ai_system]
+      jurisdictions: [EU]
+      high_risk: true
+    severity_default: warn

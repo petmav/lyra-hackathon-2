@@ -43,7 +43,7 @@ export type AssetType =
   | "workflow_run";
 
 export type RiskTier = "L1" | "L2" | "L3" | "L4";
-export type Lifecycle = "discovered" | "classified" | "governed" | "deprecated";
+export type Lifecycle = "discovered" | "classified" | "governed" | "ephemeral" | "deprecated";
 
 export interface Asset extends Entity {
   type: AssetType;
@@ -180,6 +180,7 @@ export type StepStatus =
   | "succeeded"
   | "failed"
   | "skipped"
+  | "blocked"
   | "awaiting_approval";
 
 export interface StepRun {

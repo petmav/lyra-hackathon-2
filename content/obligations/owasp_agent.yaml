@@ -1,0 +1,17 @@
+framework: owasp_agent
+version: "2026.04"
+obligations:
+  - id: obl_owasp_agent_excessive_agency
+    urn: urn:praetor:obligation:owasp_agent:excessive_agency
+    citation: A04
+    text: Agent tools must constrain authority and validate arguments before external action.
+    applicability:
+      asset_types: [agent, workflow_agent, tool]
+    severity_default: block
+  - id: obl_owasp_agent_memory_provenance
+    urn: urn:praetor:obligation:owasp_agent:memory_provenance
+    citation: A06
+    text: Agent memory and retrieval outputs should preserve provenance and support audit review.
+    applicability:
+      asset_types: [agent, workflow_agent, memory_store]
+    severity_default: warn

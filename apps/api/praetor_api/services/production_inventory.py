@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+import yaml
 
 from praetor_api.models.asset import Asset
+from praetor_api.models.obligation import Obligation
 
 
 OBLIGATIONS: list[dict[str, Any]] = [
@@ -40,6 +43,21 @@ OBLIGATIONS: list[dict[str, Any]] = [
         "severity_default": "warn",
         "version": "2026.04",
     },
+]
+
+
+def _root_content_dir() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "content"
+        if candidate.exists():
+            return candidate
+    return Path.cwd() / "content"
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+OBLIGATION_SEED_DIRS = [
+    _root_content_dir() / "obligations",
+    PACKAGE_ROOT / "seed_content" / "obligations",
 ]
 
 CONTROLS: list[dict[str, Any]] = [
@@ -83,12 +101,57 @@ async def child_assets(session: AsyncSession, parent_id: str) -> list[dict[str, 
     return [_asset_to_api(row) for row in result.scalars().all()]
 
 
-def list_obligations() -> list[dict[str, Any]]:
-    return [dict(row) for row in OBLIGATIONS]
+async def ensure_obligations(session: AsyncSession) -> list[Obligation]:
+    seed_rows = _load_obligation_seed_rows()
+    rows: list[Obligation] = []
+    for data in seed_rows:
+        result = await session.execute(select(Obligation).where(Obligation.urn == data["urn"]))
+        row = result.scalar_one_or_none()
+        applicability = dict(data.get("applicability") or {})
+        applicability["version"] = data.get("version", "2026.04")
+        if row is None:
+            row = Obligation(
+                urn=data["urn"],
+                framework=data["framework"],
+                citation=data["citation"],
+                text=data["text"],
+                applicability=applicability,
+                severity_default=data["severity_default"],
+            )
+            session.add(row)
+            await session.flush()
+        else:
+            row.framework = data["framework"]
+            row.citation = data["citation"]
+            row.text = data["text"]
+            row.applicability = applicability
+            row.severity_default = data["severity_default"]
+        rows.append(row)
+    return rows
 
 
-def get_obligation(urn: str) -> dict[str, Any] | None:
-    return next((dict(row) for row in OBLIGATIONS if row["urn"] == urn or row["id"] == urn), None)
+async def list_obligations(session: AsyncSession) -> list[dict[str, Any]]:
+    await ensure_obligations(session)
+    await session.commit()
+    result = await session.execute(select(Obligation).order_by(Obligation.framework, Obligation.citation))
+    return [_obligation_to_api(row) for row in result.scalars().all()]
+
+
+async def get_obligation(session: AsyncSession, urn: str) -> dict[str, Any] | None:
+    await ensure_obligations(session)
+    await session.commit()
+    filters = [Obligation.urn == urn]
+    for seed in _load_obligation_seed_rows():
+        if seed["id"] == urn:
+            filters.append(Obligation.urn == seed["urn"])
+            break
+    try:
+        filters.append(Obligation.id == UUID(urn))
+    except ValueError:
+        pass
+    result = await session.execute(select(Obligation).where(or_(*filters)))
+    row = result.scalar_one_or_none()
+    return _obligation_to_api(row) if row else None
 
 
 def list_controls() -> list[dict[str, Any]]:
@@ -132,4 +195,72 @@ def _asset_to_api(row: Asset) -> dict[str, Any]:
         "fingerprint": row.fingerprint,
         "metadata": config.get("metadata", {}),
         "config": config,
+    }
+
+
+def static_obligations() -> list[dict[str, Any]]:
+    return [dict(row) for row in _load_obligation_seed_rows()]
+
+
+def get_static_obligation(urn: str) -> dict[str, Any] | None:
+    return next((dict(row) for row in _load_obligation_seed_rows() if row["urn"] == urn or row["id"] == urn), None)
+
+
+def _load_obligation_seed_rows() -> list[dict[str, Any]]:
+    by_urn = {row["urn"]: dict(row) for row in OBLIGATIONS}
+    for path in _obligation_seed_files():
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        framework = str(payload.get("framework") or path.stem)
+        version = str(payload.get("version") or "2026.04")
+        obligations = payload.get("obligations") or []
+        if not isinstance(obligations, list):
+            continue
+        for item in obligations:
+            if not isinstance(item, dict):
+                continue
+            urn = str(item.get("urn") or "")
+            if not urn:
+                continue
+            by_urn[urn] = {
+                "id": str(item.get("id") or urn.rsplit(":", 1)[-1]),
+                "urn": urn,
+                "framework": str(item.get("framework") or framework),
+                "citation": str(item.get("citation") or ""),
+                "text": str(item.get("text") or ""),
+                "applicability": dict(item.get("applicability") or {}),
+                "severity_default": str(item.get("severity_default") or "warn"),
+                "version": str(item.get("version") or version),
+            }
+    return list(by_urn.values())
+
+
+def _obligation_seed_files() -> list[Path]:
+    files: dict[str, Path] = {}
+    for directory in OBLIGATION_SEED_DIRS:
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.yaml")):
+            files[path.name] = path
+    return list(files.values())
+
+
+def _obligation_to_api(row: Obligation) -> dict[str, Any]:
+    applicability = row.applicability or {}
+    external_id = next(
+        (
+            seed["id"]
+            for seed in _load_obligation_seed_rows()
+            if seed["urn"] == row.urn
+        ),
+        row.urn.rsplit(":", 1)[-1],
+    )
+    return {
+        "id": external_id,
+        "urn": row.urn,
+        "framework": row.framework,
+        "citation": row.citation,
+        "text": row.text,
+        "applicability": {key: value for key, value in applicability.items() if key != "version"},
+        "severity_default": row.severity_default,
+        "version": str(applicability.get("version") or row.version),
     }

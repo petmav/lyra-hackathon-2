@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import hashlib
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from praetor_api.models.corpus import Corpus
@@ -15,6 +16,7 @@ from praetor_api.services.corpus_index import CORPORA
 
 CORPUS_URN_PREFIX = "urn:praetor:corpus:"
 DOCUMENT_URN_PREFIX = "urn:praetor:document:"
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _corpus_urn(corpus_id: str) -> str:
@@ -31,6 +33,20 @@ def _external_id(urn: str, prefix: str) -> str:
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _root_content_dir() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "content"
+        if candidate.exists():
+            return candidate
+    return Path.cwd() / "content"
+
+
+SEED_DIRS = [
+    _root_content_dir() / "corpora_seed",
+    PACKAGE_ROOT / "seed_content" / "corpora_seed",
+]
 
 
 async def ensure_corpora(session: AsyncSession) -> list[Corpus]:
@@ -53,7 +69,7 @@ async def ensure_corpora(session: AsyncSession) -> list[Corpus]:
 
 
 async def list_corpora(session: AsyncSession) -> list[dict[str, Any]]:
-    corpora = await ensure_corpora(session)
+    corpora = await seed_corpora(session)
     for corpus in corpora:
         corpus.document_count = await _document_count(session, corpus.id)
     await session.commit()
@@ -61,6 +77,7 @@ async def list_corpora(session: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def get_corpus(session: AsyncSession, corpus_id: str) -> dict[str, Any] | None:
+    await seed_corpora(session)
     corpus = await _find_corpus(session, corpus_id)
     if corpus is None:
         return None
@@ -70,6 +87,7 @@ async def get_corpus(session: AsyncSession, corpus_id: str) -> dict[str, Any] | 
 
 
 async def list_documents(session: AsyncSession, corpus_id: str) -> list[dict[str, Any]]:
+    await seed_corpora(session)
     corpus = await _find_corpus(session, corpus_id)
     if corpus is None:
         raise KeyError(corpus_id)
@@ -99,6 +117,49 @@ async def ingest_document(
         raise KeyError(corpus_id)
 
     digest = _hash_text(f"{source_uri}\n{text}")
+    existing_result = await session.execute(
+        select(Document)
+        .where(Document.corpus_id == corpus.id, Document.source_uri == source_uri)
+        .order_by(Document.created_at)
+    )
+    existing_documents = list(existing_result.scalars().all())
+    existing = existing_documents[0] if existing_documents else None
+    if existing is not None:
+        for duplicate in existing_documents[1:]:
+            await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == duplicate.id))
+            await session.delete(duplicate)
+        if existing.content_hash != digest:
+            existing.content_hash = digest
+            existing.title = title
+            existing.parsed_structure = {"text": text}
+            existing.framework = corpus.kind
+            await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == existing.id))
+            chunks = _chunk_text(existing.id, text)
+            session.add_all(chunks)
+        else:
+            chunks_result = await session.execute(
+                select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == existing.id)
+            )
+            chunk_count = int(chunks_result.scalar_one() or 0)
+            return {
+                "id": _external_id(existing.urn, DOCUMENT_URN_PREFIX),
+                "corpus_id": corpus_id,
+                "title": existing.title,
+                "source_uri": existing.source_uri,
+                "chunk_count": chunk_count,
+            }
+        corpus.document_count = await _document_count(session, corpus.id)
+        corpus.indexed_at = datetime.now(UTC)
+        await session.commit()
+        await session.refresh(existing)
+        return {
+            "id": _external_id(existing.urn, DOCUMENT_URN_PREFIX),
+            "corpus_id": corpus_id,
+            "title": existing.title,
+            "source_uri": existing.source_uri,
+            "chunk_count": len(chunks),
+        }
+
     document_id = f"doc_{uuid4().hex[:12]}"
     document = Document(
         urn=_document_urn(document_id),
@@ -132,6 +193,7 @@ async def ingest_document(
 
 
 async def search(session: AsyncSession, corpus_id: str, query: str, k: int = 8) -> list[dict[str, Any]]:
+    await seed_corpora(session)
     corpus = await _find_corpus(session, corpus_id)
     if corpus is None:
         raise KeyError(corpus_id)
@@ -157,6 +219,25 @@ async def search(session: AsyncSession, corpus_id: str, query: str, k: int = 8) 
             }
         )
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:k]
+
+
+async def seed_corpora(session: AsyncSession) -> list[Corpus]:
+    corpora = await ensure_corpora(session)
+    for seed_file in _seed_files():
+        corpus_id = _corpus_id_for_seed(seed_file)
+        if corpus_id not in CORPORA:
+            continue
+        text = seed_file.read_text(encoding="utf-8").strip()
+        if not text:
+            continue
+        await ingest_document(
+            session,
+            corpus_id,
+            _title_from_markdown(text, CORPORA[corpus_id]["name"]),
+            f"seed://corpora/{seed_file.name}",
+            text,
+        )
+    return corpora
 
 
 async def _find_corpus(session: AsyncSession, corpus_id: str) -> Corpus | None:
@@ -220,3 +301,26 @@ def _chunk_text(document_id: UUID, text: str) -> list[DocumentChunk]:
         )
         for index, block in enumerate(blocks)
     ]
+
+
+def _seed_files() -> list[Path]:
+    files: dict[str, Path] = {}
+    for directory in SEED_DIRS:
+        if not directory.exists():
+            continue
+        for path in sorted(directory.glob("*.md")):
+            files[path.name] = path
+    return list(files.values())
+
+
+def _title_from_markdown(text: str, fallback: str) -> str:
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if first.startswith("#"):
+        return first.lstrip("#").strip() or fallback
+    return fallback
+
+
+def _corpus_id_for_seed(path: Path) -> str:
+    if path.stem == "iso_42001_excerpt":
+        return "iso_42001"
+    return path.stem

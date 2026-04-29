@@ -1,0 +1,17 @@
+framework: nist_ai_rmf
+version: "2026.04"
+obligations:
+  - id: obl_nist_ai_rmf_govern_1_1
+    urn: urn:praetor:obligation:nist_ai_rmf:govern_1_1
+    citation: GOVERN 1.1
+    text: Accountability structures for AI risk management must be documented and maintained.
+    applicability:
+      asset_types: [ai_system, agent, workflow_agent]
+    severity_default: warn
+  - id: obl_nist_ai_rmf_map_4_1
+    urn: urn:praetor:obligation:nist_ai_rmf:map_4_1
+    citation: MAP 4.1
+    text: AI system risks and affected stakeholders must be mapped before deployment or major change.
+    applicability:
+      asset_types: [ai_system, agent]
+    severity_default: warn

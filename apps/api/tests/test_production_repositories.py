@@ -8,7 +8,7 @@ if os.getenv("PRAETOR_RUN_DB_TESTS") != "1":
 from praetor_api.db import AsyncSessionLocal
 from praetor_api.models.asset import Asset
 from praetor_api.models.sandbox_run import SandboxRun
-from praetor_api.services import production_corpus, production_hooks, production_reviews
+from praetor_api.services import production_corpus, production_hooks, production_inventory, production_reviews
 from praetor_api.services import production_workflows
 from sqlalchemy import select
 
@@ -132,3 +132,16 @@ async def test_production_hooks_and_corpus_persist() -> None:
         hits = await production_corpus.search(session, "internal_data_min", "recipient domains", 3)
 
     assert hits[0]["score"] > 0
+
+    async with AsyncSessionLocal() as session:
+        corpora = await production_corpus.list_corpora(session)
+
+    assert {row["id"] for row in corpora} >= {"eu_ai_act", "gdpr", "internal_data_min", "iso_42001", "owasp_agent"}
+    assert all(row["document_count"] >= 1 for row in corpora)
+
+    async with AsyncSessionLocal() as session:
+        obligations = await production_inventory.list_obligations(session)
+
+    obligation_urns = {row["urn"] for row in obligations}
+    assert "urn:praetor:obligation:eu_ai_act:risk_management" in obligation_urns
+    assert "urn:praetor:obligation:owasp_agent:excessive_agency" in obligation_urns

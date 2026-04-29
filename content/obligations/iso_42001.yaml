@@ -1,0 +1,18 @@
+framework: iso_42001
+version: "2026.04"
+obligations:
+  - id: obl_iso_42001_8_3
+    urn: urn:praetor:obligation:iso_42001:8_3
+    citation: 8.3
+    text: AI system changes and operational tools must be controlled, evaluated, and evidenced.
+    applicability:
+      asset_types: [agent, tool, workflow_agent, ai_system]
+      jurisdictions: [US, EU]
+    severity_default: warn
+  - id: obl_iso_42001_7_4
+    urn: urn:praetor:obligation:iso_42001:7_4
+    citation: 7.4
+    text: Relevant AI system information must be communicated to responsible parties in an auditable form.
+    applicability:
+      asset_types: [agent, workflow_agent, ai_system]
+    severity_default: info

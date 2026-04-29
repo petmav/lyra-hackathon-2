@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 
 from praetor_api.db import AsyncSessionLocal
 from praetor_api.services import production_inventory
+from praetor_api.settings import get_settings
 
 router = APIRouter(tags=["inventory"])
 
@@ -29,12 +30,19 @@ async def asset_children(asset_id: str) -> list[dict]:
 
 @router.get("/obligations")
 async def obligations() -> list[dict]:
-    return production_inventory.list_obligations()
+    if get_settings().data_mode != "production":
+        return production_inventory.static_obligations()
+    async with AsyncSessionLocal() as session:
+        return await production_inventory.list_obligations(session)
 
 
 @router.get("/obligations/{obligation_id:path}")
 async def obligation(obligation_id: str) -> dict:
-    found = production_inventory.get_obligation(obligation_id)
+    if get_settings().data_mode != "production":
+        found = production_inventory.get_static_obligation(obligation_id)
+    else:
+        async with AsyncSessionLocal() as session:
+            found = await production_inventory.get_obligation(session, obligation_id)
     if found is None:
         raise HTTPException(status_code=404, detail="obligation not found")
     return found

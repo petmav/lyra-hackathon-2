@@ -1,0 +1,19 @@
+framework: gdpr
+version: "2026.04"
+obligations:
+  - id: obl_gdpr_5_1_c
+    urn: urn:praetor:obligation:gdpr:art_5_1_c
+    citation: Art. 5(1)(c)
+    text: Personal data must be adequate, relevant, and limited to what is necessary.
+    applicability:
+      asset_types: [agent, dataset, tool, workflow_agent]
+      jurisdictions: [EU]
+    severity_default: warn
+  - id: obl_gdpr_32_security
+    urn: urn:praetor:obligation:gdpr:art_32_security
+    citation: Art. 32
+    text: Processing systems must apply appropriate technical and organisational security measures.
+    applicability:
+      asset_types: [agent, tool, dataset, ai_system]
+      jurisdictions: [EU]
+    severity_default: block

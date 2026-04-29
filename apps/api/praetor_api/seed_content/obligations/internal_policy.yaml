@@ -1,0 +1,18 @@
+framework: internal_policy
+version: "2026.04"
+obligations:
+  - id: obl_internal_data_min
+    urn: urn:praetor:obligation:internal:data_min_3_2
+    citation: Data Minimisation 3.2
+    text: Outbound communications must validate recipient domains before sending customer data.
+    applicability:
+      asset_types: [agent, tool, workflow_agent]
+      high_risk: true
+    severity_default: block
+  - id: obl_internal_approval_external_write
+    urn: urn:praetor:obligation:internal:approval_external_write
+    citation: Change Control 4.1
+    text: External writes or pull requests created by an agent must pass approval and effect-radius checks.
+    applicability:
+      asset_types: [agent, workflow_agent, tool]
+    severity_default: block
