@@ -47,6 +47,8 @@ Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 - `POST /hooks/json-stack:preview` renders a dry-run request for a stack operation.
 - `POST /hooks/json-stack` validates and persists a user-provided JSON Stack manifest as a first-class `hook` record in production mode.
 
+The frontend `/hooks/validate` page includes an OpenAPI JSON importer that extracts selected operations, infers JSON Stack direction/effect metadata, builds input schemas and output maps, and saves the generated manifest through `POST /hooks/json-stack`.
+
 Demo hook operations:
 
 - `github_stub` with `read_repo` or `open_pr`

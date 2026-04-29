@@ -139,8 +139,9 @@ Current support:
 - Proposed-change dispatch can route approved remediation to GitHub, Jira, Linear, Microsoft Graph email, Slack, and ServiceNow through JSON Stack hooks.
 - User-provided JSON Stack manifests persist as first-class production `hook` records through `POST /hooks/json-stack`.
 - JSON Stack live responses evaluate operation `output_map` entries into normalized mapped fields, and hook calls carry idempotency keys to avoid duplicate external writes.
+- The hooks UI can import OpenAPI JSON, select operations, convert them to JSON Stack manifests, validate, and persist them.
 
 Next implementation steps:
 
 - Replace the current proposed-change approval marker with first-class policy decision rows for every effect-radius approval.
-- Add UI forms for importing OpenAPI and converting selected operations into JSON Stack manifests.
+- Add YAML parsing and richer OpenAPI security scheme import.

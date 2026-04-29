@@ -235,6 +235,9 @@ export interface Hook extends Entity {
   scopes: string[];
   effect_radius: EffectRadius;
   enabled: boolean;
+  source?: "catalog" | "custom";
+  json_stack_id?: string | null;
+  json_stack?: JsonStackManifest;
   last_health_check?: ISOTimestamp;
   health_status?: "ok" | "degraded" | "down";
 }
@@ -250,6 +253,7 @@ export interface HookCall {
   inputs_redacted: Record<string, unknown>;
   outputs_redacted: Record<string, unknown>;
   status: "ok" | "failed" | "denied";
+  idempotency_key?: string;
   latency_ms: number;
   errors: string[];
 }
@@ -296,7 +300,7 @@ export interface JsonStackOperation {
 
 export interface JsonStackAuth {
   kind: string;
-  auth_ref: string;
+  auth_ref: string | null;
   scopes?: string[];
 }
 
@@ -316,9 +320,16 @@ export interface JsonStackValidateResult {
 }
 
 export interface JsonStackPreviewRequest {
-  stack_id: string;
+  stack_id?: string;
+  spec?: JsonStackManifest;
   operation: string;
   inputs: Record<string, unknown>;
+}
+
+export interface JsonStackPersistResult {
+  ok: boolean;
+  hook?: Hook;
+  errors?: string[];
 }
 
 export interface JsonStackPreviewRendered {

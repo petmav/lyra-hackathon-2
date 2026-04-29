@@ -48,6 +48,7 @@ import type {
   HookCall,
   JsonStackCatalogEntry,
   JsonStackManifest,
+  JsonStackPersistResult,
   JsonStackPreviewRequest,
   JsonStackPreviewResult,
   JsonStackValidateResult,
@@ -310,7 +311,12 @@ export const api = {
         try {
           return await request<JsonStackManifest>(`/hooks/json-stack/catalog/${encodeURIComponent(stackId)}`);
         } catch {
-          return null;
+          try {
+            const hook = await request<Hook>(`/hooks/${encodeURIComponent(stackId)}`);
+            return hook.json_stack ?? null;
+          } catch {
+            return null;
+          }
         }
       }
       await sleep();
@@ -345,6 +351,16 @@ export const api = {
         latency_ms: 0,
         error: "NEXT_PUBLIC_API_BASE not configured"
       };
+    },
+    async persist(spec: JsonStackManifest, enabled = true): Promise<JsonStackPersistResult> {
+      if (USE_API) {
+        return request<JsonStackPersistResult>("/hooks/json-stack", {
+          method: "POST",
+          body: JSON.stringify({ spec, enabled })
+        });
+      }
+      await sleep();
+      return { ok: false, errors: ["NEXT_PUBLIC_API_BASE not configured"] };
     }
   },
 
