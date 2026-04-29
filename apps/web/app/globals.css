@@ -1,0 +1,199 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Praetor design tokens & base styles
+   Functional, clean: one sans family + mono for hashes, clear hierarchy,
+   no decorative serifs or hidden animations.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@import url("https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* surfaces */
+  --ink: #0d0d0f;
+  --ink-2: #161618;
+  --ink-3: #1f1f22;
+  --paper: #f2f2f3;
+  --paper-dim: #c8c9cc;
+  --paper-fade: #8c8d92;
+  --rule: #2c2c30;
+  --rule-bright: #3a3a3f;
+
+  /* single accent */
+  --gold: #c4a572;
+  --gold-bright: #e5c896;
+  --gold-dim: #8b7752;
+
+  /* severity */
+  --crit: #c44a47;
+  --warn: #d4a857;
+  --ok: #6fae67;
+  --info: #6f88a8;
+}
+
+html,
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+::selection {
+  background: var(--gold);
+  color: var(--ink);
+}
+
+/* hairline scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--rule-bright);
+}
+
+/* ─── type helpers ─── */
+
+.smallcaps {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--paper-fade);
+}
+
+/* legacy editorial classes mapped to clean sans-serif equivalents */
+.ed-display {
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.ed-display-italic {
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.ed-h1 {
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 1.625rem;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+}
+
+.ed-h2 {
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 1.125rem;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+}
+
+.ed-h3 {
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+
+/* legacy: vertical sidebar wordmark — kept as a no-op so any leftover
+   markup stays inert rather than rotated. */
+.vertical-rl {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+/* hash-chain hairline */
+.hashchain {
+  position: relative;
+}
+.hashchain::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.5px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--rule) 8%,
+    var(--rule) 92%,
+    transparent 100%
+  );
+}
+
+/* hairline rules */
+.rule-t {
+  border-top: 1px solid var(--rule);
+}
+.rule-b {
+  border-bottom: 1px solid var(--rule);
+}
+.rule-l {
+  border-left: 1px solid var(--rule);
+}
+.rule-r {
+  border-right: 1px solid var(--rule);
+}
+
+/* ── animations: kept minimal & always reach end-state ── */
+
+.event-new {
+  position: relative;
+}
+.event-new::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--gold);
+  animation: gold-fade 1000ms ease-out forwards;
+}
+@keyframes gold-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+/* focus ring — never blue, never default */
+:focus-visible {
+  outline: 1px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* legacy decorative helpers — neutralised */
+.grain {
+  position: relative;
+}
+
+.display-rule {
+  height: 1px;
+  background: var(--rule);
+}
