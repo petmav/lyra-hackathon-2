@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from praetor_api.bus import EVENTS_STREAM, get_redis_client
 from praetor_api.models.agent_event import AgentEvent
 from praetor_api.models.asset import Asset
 from praetor_api.models.audit_packet import AuditPacket
@@ -515,6 +516,19 @@ async def consume_evidence_events(
     limit: int = 100,
 ) -> dict[str, Any]:
     limit = max(1, min(limit, 500))
+    if get_settings().data_mode == "production":
+        stream_result = await _consume_evidence_events_from_stream(session, consumer=consumer, limit=limit)
+        if stream_result is not None:
+            return stream_result
+    return await _consume_evidence_events_from_db(session, consumer=consumer, limit=limit)
+
+
+async def _consume_evidence_events_from_db(
+    session: AsyncSession,
+    *,
+    consumer: str,
+    limit: int,
+) -> dict[str, Any]:
     checkpoint = await _evidence_checkpoint(session, consumer)
     query = select(AgentEvent).order_by(AgentEvent.ts, AgentEvent.id).limit(limit)
     if checkpoint.last_event_ts is not None:
@@ -527,44 +541,9 @@ async def consume_evidence_events(
     result = await session.execute(query)
     events = list(result.scalars().all())
     if not events:
-        return {"created": [], "count": 0, "checkpoint": _checkpoint_to_api(checkpoint)}
+        return {"created": [], "count": 0, "source": "postgres", "checkpoint": _checkpoint_to_api(checkpoint)}
 
-    await production_inventory.ensure_obligations(session)
-    obligation_by_urn = await _obligation_by_urn(session)
-    groups: dict[UUID, list[AgentEvent]] = {}
-    asset_events: list[AgentEvent] = []
-    for event in events:
-        if event.workflow_run_id is not None:
-            groups.setdefault(event.workflow_run_id, []).append(event)
-        else:
-            asset_events.append(event)
-
-    created: list[EvidenceRecord] = []
-    for workflow_run_id, run_events in groups.items():
-        workflow_run = await session.get(WorkflowRun, workflow_run_id)
-        if workflow_run is None:
-            continue
-        created.extend(
-            await _create_evidence_from_events(
-                session,
-                events=run_events,
-                obligation_by_urn=obligation_by_urn,
-                control_id=_control_for_events(run_events),
-                asset_id=workflow_run.asset_id,
-                workflow_run_id=workflow_run.id,
-            )
-        )
-    for event in asset_events:
-        created.extend(
-            await _create_evidence_from_events(
-                session,
-                events=[event],
-                obligation_by_urn=obligation_by_urn,
-                control_id=_control_for_events([event]),
-                asset_id=event.asset_id,
-                workflow_run_id=None,
-            )
-        )
+    created = await _materialize_evidence_for_events(session, events)
 
     last = events[-1]
     checkpoint.last_event_id = last.id
@@ -576,7 +555,75 @@ async def consume_evidence_events(
     return {
         "created": [_external_id(row.urn, EVIDENCE_URN_PREFIX) for row in created],
         "count": len(created),
+        "source": "postgres",
         "checkpoint": _checkpoint_to_api(checkpoint),
+    }
+
+
+async def _consume_evidence_events_from_stream(
+    session: AsyncSession,
+    *,
+    consumer: str,
+    limit: int,
+) -> dict[str, Any] | None:
+    group = "praetor:evidence"
+    stream_entries: list[tuple[str, dict[str, Any]]] = []
+    client = None
+    try:
+        client = get_redis_client()
+        try:
+            await client.xgroup_create(EVENTS_STREAM, group, id="0", mkstream=True)
+        except Exception as exc:
+            if "BUSYGROUP" not in str(exc):
+                raise
+        response = await client.xreadgroup(
+            group,
+            consumer,
+            {EVENTS_STREAM: ">"},
+            count=limit,
+            block=1,
+        )
+        for _, messages in response:
+            for message_id, fields in messages:
+                event_payload = fields.get("event")
+                if not isinstance(event_payload, str):
+                    continue
+                event = json.loads(event_payload)
+                if isinstance(event, dict):
+                    stream_entries.append((str(message_id), event))
+    except Exception:
+        return None
+    finally:
+        if client is not None:
+            await client.aclose()
+
+    checkpoint = await _evidence_checkpoint(session, consumer)
+    if not stream_entries:
+        return {"created": [], "count": 0, "source": "redis_stream", "checkpoint": _checkpoint_to_api(checkpoint)}
+
+    event_ids = [entry[1].get("id") for entry in stream_entries if isinstance(entry[1].get("id"), str)]
+    result = await session.execute(select(AgentEvent).where(AgentEvent.run_id.in_(event_ids)))
+    by_run_id = {row.run_id: row for row in result.scalars().all()}
+    events = [by_run_id[event_id] for event_id in event_ids if event_id in by_run_id]
+    if not events:
+        await _ack_stream_entries(group, [entry[0] for entry in stream_entries])
+        return {"created": [], "count": 0, "source": "redis_stream", "checkpoint": _checkpoint_to_api(checkpoint)}
+
+    created = await _materialize_evidence_for_events(session, events)
+    last = events[-1]
+    checkpoint.last_event_id = last.id
+    checkpoint.last_event_ts = last.ts
+    checkpoint.updated_at = _now()
+    await session.commit()
+    await _ack_stream_entries(group, [entry[0] for entry in stream_entries])
+    for row in created:
+        await session.refresh(row)
+    return {
+        "created": [_external_id(row.urn, EVIDENCE_URN_PREFIX) for row in created],
+        "count": len(created),
+        "source": "redis_stream",
+        "checkpoint": _checkpoint_to_api(checkpoint),
+        "stream": {"name": EVENTS_STREAM, "group": group, "acked": len(stream_entries)},
     }
 
 
@@ -863,6 +910,59 @@ async def _evidence_checkpoint(session: AsyncSession, consumer: str) -> Evidence
         session.add(checkpoint)
         await session.flush()
     return checkpoint
+
+
+async def _materialize_evidence_for_events(
+    session: AsyncSession,
+    events: list[AgentEvent],
+) -> list[EvidenceRecord]:
+    await production_inventory.ensure_obligations(session)
+    obligation_by_urn = await _obligation_by_urn(session)
+    groups: dict[UUID, list[AgentEvent]] = {}
+    asset_events: list[AgentEvent] = []
+    for event in events:
+        if event.workflow_run_id is not None:
+            groups.setdefault(event.workflow_run_id, []).append(event)
+        else:
+            asset_events.append(event)
+
+    created: list[EvidenceRecord] = []
+    for workflow_run_id, run_events in groups.items():
+        workflow_run = await session.get(WorkflowRun, workflow_run_id)
+        if workflow_run is None:
+            continue
+        created.extend(
+            await _create_evidence_from_events(
+                session,
+                events=run_events,
+                obligation_by_urn=obligation_by_urn,
+                control_id=_control_for_events(run_events),
+                asset_id=workflow_run.asset_id,
+                workflow_run_id=workflow_run.id,
+            )
+        )
+    for event in asset_events:
+        created.extend(
+            await _create_evidence_from_events(
+                session,
+                events=[event],
+                obligation_by_urn=obligation_by_urn,
+                control_id=_control_for_events([event]),
+                asset_id=event.asset_id,
+                workflow_run_id=None,
+            )
+        )
+    return created
+
+
+async def _ack_stream_entries(group: str, message_ids: list[str]) -> None:
+    if not message_ids:
+        return
+    client = get_redis_client()
+    try:
+        await client.xack(EVENTS_STREAM, group, *message_ids)
+    finally:
+        await client.aclose()
 
 
 async def _create_evidence_from_events(

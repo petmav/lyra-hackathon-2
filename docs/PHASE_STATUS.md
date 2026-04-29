@@ -93,6 +93,7 @@ Legend:
 - ~~Provider-specific model streaming exists through `POST /models:stream`, normalizing OpenAI Responses API, Anthropic Messages API, and Gemini `streamGenerateContent` SSE formats into `start`/`delta`/`usage`/`done`/`error` events.~~
 - ~~JWT/RBAC auth mode exists alongside demo bearer auth: `PRAETOR_AUTH_MODE=jwt` validates HS256 JWTs, issuer/audience, viewer/operator/admin roles, HTTP requests, and WebSocket streams.~~
 - ~~Secret resolution now supports HashiCorp Vault KV v2 through `PRAETOR_SECRET_BACKEND=vault|env_then_vault|vault_then_env`, and model provider keys can resolve from `secret:openai_api_key`, `secret:anthropic_api_key`, and `secret:google_api_key`.~~
+- ~~Evidence worker v2 now consumes production workflow events through a Redis Streams consumer group and ACKs stream entries only after evidence rows commit, with persisted event-table fallback when Redis is unavailable.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -103,7 +104,7 @@ Legend:
 - ~~Persisted event reads now reconstruct ordering from hash-chain links, avoiding same-transaction timestamp ordering failures.~~
 - ~~Partial: polling evidence sweeps are replaced by a checkpointed event consumer over persisted event history with policy-decision and obligation mapping hooks.~~
 - ~~Live evidence consumer smoke passes against Compose production API: `POST /evidence-records:consume` created checkpointed evidence records and returned the `evidence-worker-v2` checkpoint.~~
-- Open: consume directly from Redis Streams with durable stream IDs instead of polling persisted `agent_event` rows.
+- ~~Evidence consumer directly uses Redis Streams consumer groups in production before falling back to persisted `agent_event` rows.~~
 
 ## Phase 0 - Demo Critical Path
 
@@ -207,7 +208,8 @@ Legend:
 - ~~Partial: evidence sweep assembles records from persisted workflow events and audit generation invokes it.~~
 - ~~Partial: evidence worker loop periodically materializes records from workflow events through the production sweep endpoint.~~
 - ~~Partial: evidence assembly now uses event-consumer checkpoints and attaches policy decisions plus obligation mappings where available.~~
-- Open: first-class policy decision persistence for workflow gates and a Redis Streams consumer group.
+- ~~Redis Streams consumer group path exists for evidence worker v2.~~
+- Open: first-class policy decision persistence for workflow gates.
 - ~~Ed25519 signing for generated audit packets.~~
 - ~~PDF artifact output exists for generated audit packets.~~
 - ~~JSON sidecar output.~~
@@ -256,11 +258,11 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Convert the checkpointed evidence consumer from persisted `agent_event` polling to Redis Streams consumer groups.
-2. Add YAML parsing and richer OpenAPI security scheme import.
-3. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
-4. Add provider streaming to the frontend/runtime views where live partial output is useful.
-5. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
+1. Add YAML parsing and richer OpenAPI security scheme import.
+2. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
+3. Add provider streaming to the frontend/runtime views where live partial output is useful.
+4. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
+5. Add first-class policy decision persistence for workflow gates.
 
 ## Update Rules For Future Work
 

@@ -155,6 +155,9 @@ Set `PRAETOR_WORKFLOW_EXECUTION_MODE=sync` to execute a run inside the API reque
 `PRAETOR_WORKFLOW_EXECUTION_MODE=queued` to persist runs as `queued` and let the workflow worker
 drain them through `POST /workflow-runs:drain`. The Compose `workflow` service runs this drain loop
 and periodically calls `POST /evidence-records:consume` to materialize evidence in the background.
+In production mode, evidence consumption first uses a Redis Streams consumer group over the
+hash-chained event stream and ACKs entries only after evidence rows commit; if Redis is unavailable,
+the endpoint falls back to the persisted event table cursor.
 
 Workflow definition responses include the full frontend contract: `trigger_config`, `inputs_schema`,
 `outputs_schema`, `required_hooks`, `required_corpora`, `default_policy_set`, and optional
