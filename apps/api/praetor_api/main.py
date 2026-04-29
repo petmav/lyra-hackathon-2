@@ -89,6 +89,7 @@ async def runtime_config() -> dict[str, str | bool]:
         "default_model_provider": settings.default_model_provider,
         "default_model_name": settings.default_model_name,
         "agent_model_mode": settings.agent_model_mode,
+        "workflow_execution_mode": settings.workflow_execution_mode,
     }
 
 

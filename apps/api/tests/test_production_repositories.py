@@ -59,6 +59,29 @@ async def test_production_workflow_events_and_review_lifecycle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_queued_workflow_drain_executes_persisted_run() -> None:
+    async with AsyncSessionLocal() as session:
+        queued = await production_workflows.enqueue_workflow_run(
+            session,
+            "code_compliance_scan",
+            {"repo_url": "stub://support-bot"},
+            model_provider="openai",
+            model="gpt-5.4-mini",
+        )
+
+    assert queued["status"] == "queued"
+    assert {step["status"] for step in queued["step_runs"]} == {"pending"}
+
+    async with AsyncSessionLocal() as session:
+        processed = await production_workflows.drain_queued_workflows(session, limit=1)
+
+    assert len(processed) == 1
+    assert processed[0]["id"] == queued["id"]
+    assert processed[0]["status"] == "succeeded"
+    assert processed[0]["outputs"]["findings"][0]["severity"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_production_hooks_and_corpus_persist() -> None:
     async with AsyncSessionLocal() as session:
         hooks = await production_hooks.list_hooks(session)

@@ -73,12 +73,7 @@ async def append_persisted_event(
 ) -> dict[str, Any]:
     event_uuid = uuid4()
     external_id = f"evt_{event_uuid.hex[:12]}"
-    last_hash = await session.scalar(
-        select(AgentEvent.hash_chain_self)
-        .where(AgentEvent.asset_id == asset_record_id)
-        .order_by(AgentEvent.ts.desc())
-        .limit(1)
-    )
+    last_hash = await _asset_chain_tail_hash(session, asset_record_id)
     prev, self_hash = compute(last_hash, payload)
     row = AgentEvent(
         id=event_uuid,
@@ -123,9 +118,9 @@ async def events_for_asset_db(
         return []
 
     result = await session.execute(
-        select(AgentEvent).where(AgentEvent.asset_id == asset.id).order_by(AgentEvent.ts).limit(limit)
+        select(AgentEvent).where(AgentEvent.asset_id == asset.id)
     )
-    rows = list(result.scalars().all())
+    rows = _chain_order(list(result.scalars().all()))[-limit:]
     return [_row_to_event(row, asset_id=_external_asset_id(asset)) for row in rows]
 
 
@@ -144,10 +139,8 @@ async def events_for_workflow_run_db(
     result = await session.execute(
         select(AgentEvent)
         .where(AgentEvent.workflow_run_id == workflow_run.id)
-        .order_by(AgentEvent.ts)
-        .limit(limit)
     )
-    rows = list(result.scalars().all())
+    rows = _chain_order(list(result.scalars().all()))[-limit:]
     return [
         _row_to_event(row, asset_id=asset_external_id, workflow_run_id=external_run_id)
         for row in rows
@@ -200,6 +193,40 @@ async def stream_redis_events(
 def reset_events() -> None:
     EVENTS.clear()
     _asset_hashes.clear()
+
+
+async def _asset_chain_tail_hash(session: AsyncSession, asset_id: UUID) -> str | None:
+    result = await session.execute(
+        select(AgentEvent.hash_chain_prev, AgentEvent.hash_chain_self)
+        .where(AgentEvent.asset_id == asset_id)
+    )
+    rows = list(result.all())
+    if not rows:
+        return None
+    prev_hashes = {row.hash_chain_prev for row in rows if row.hash_chain_prev}
+    tails = [row.hash_chain_self for row in rows if row.hash_chain_self not in prev_hashes]
+    return tails[-1] if tails else rows[-1].hash_chain_self
+
+
+def _chain_order(rows: list[AgentEvent]) -> list[AgentEvent]:
+    if len(rows) < 2:
+        return rows
+    by_prev = {row.hash_chain_prev: row for row in rows}
+    self_hashes = {row.hash_chain_self for row in rows}
+    start = next((row for row in rows if row.hash_chain_prev not in self_hashes), rows[0])
+    ordered = [start]
+    seen = {start.id}
+    current = start
+    while True:
+        next_row = by_prev.get(current.hash_chain_self)
+        if next_row is None or next_row.id in seen:
+            break
+        ordered.append(next_row)
+        seen.add(next_row.id)
+        current = next_row
+    if len(ordered) != len(rows):
+        ordered.extend(row for row in rows if row.id not in seen)
+    return ordered
 
 
 async def _find_asset(session: AsyncSession, asset_id: str) -> Asset | None:

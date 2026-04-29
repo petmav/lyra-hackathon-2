@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -239,73 +240,255 @@ async def run_workflow(
     model_provider: str = "openai",
     model: str = "gpt-4.1-mini",
 ) -> dict[str, Any]:
+    run = await enqueue_workflow_run(
+        session,
+        workflow_id,
+        inputs,
+        model_provider=model_provider,
+        model=model,
+        initial_status="running",
+    )
+    processed = await process_workflow_run(session, run["id"])
+    if processed is None:
+        raise RuntimeError("workflow run was not persisted")
+    return processed
+
+
+async def enqueue_workflow_run(
+    session: AsyncSession,
+    workflow_id: str,
+    inputs: dict[str, Any],
+    *,
+    model_provider: str = "openai",
+    model: str = "gpt-4.1-mini",
+    initial_status: str = "queued",
+) -> dict[str, Any]:
     template = _template_for(workflow_id)
     asset = await _ensure_asset(session)
     workflow = await ensure_workflow(session, template["id"])
     run_slug = f"wfr_{uuid4().hex[:12]}"
-    context: dict[str, Any] = {"inputs": inputs, "steps": {}}
-    step_rows: list[StepRun] = []
-    findings: list[dict[str, Any]] = []
-    proposals: list[dict[str, Any]] = []
-    status = "succeeded"
-
-    for step in template["steps"]:
-        step_outputs, step_status = await _execute_with_retries(
-            step,
-            context,
-            model_provider=model_provider,
-            model=model,
-        )
-        context["steps"][step["id"]] = {"outputs": step_outputs, "status": step_status}
-        emitted = step_outputs.get("emitted", [])
-        if step["type"] == "finding.emit" and isinstance(emitted, list):
-            findings.extend(row for row in emitted if isinstance(row, dict))
-        proposed = step_outputs.get("proposed_changes", [])
-        if step["type"] == "change.propose" and isinstance(proposed, list):
-            proposals.extend(row for row in proposed if isinstance(row, dict))
-        step_rows.append(
-            StepRun(
-                step_id=step["id"],
-                step_type=step["type"],
-                status=step_status,
-                emitted_finding_ids=[row["id"] for row in emitted if isinstance(row, dict) and "id" in row],
-                emitted_proposal_ids=[row["id"] for row in proposed if isinstance(row, dict) and "id" in row],
-                inputs_redacted=_redacted_inputs(step, inputs, model_provider, model),
-                outputs_redacted=step_outputs,
-            )
-        )
-        if step_status != "succeeded":
-            status = step_status
-            break
 
     workflow_run = WorkflowRun(
         urn=f"{WORKFLOW_RUN_URN_PREFIX}{run_slug}",
         workflow_id=workflow.id,
         asset_id=asset.id,
         triggered_by="api",
-        status=status,
+        status=initial_status,
         inputs=inputs,
         outputs={
             "workflow_id": template["id"],
-            "findings": findings,
-            "proposed_changes": proposals,
+            "findings": [],
+            "proposed_changes": [],
             "model_provider": model_provider,
             "model": model,
-            "step_order": [step.step_id for step in step_rows],
+            "step_order": [step["id"] for step in template["steps"]],
+            "execution_mode": "queued" if initial_status == "queued" else "sync",
         },
         evidence_record_ids=[],
     )
     session.add(workflow_run)
     await session.flush()
 
-    for step in step_rows:
-        step.workflow_run_id = workflow_run.id
+    step_rows = [
+        StepRun(
+            workflow_run_id=workflow_run.id,
+            step_id=step["id"],
+            step_type=step["type"],
+            status="pending",
+            emitted_finding_ids=[],
+            emitted_proposal_ids=[],
+            inputs_redacted=_redacted_inputs(step, inputs, model_provider, model),
+            outputs_redacted={},
+        )
+        for step in template["steps"]
+    ]
     session.add_all(step_rows)
+    await session.commit()
+    return await workflow_run_by_id(session, run_slug) or {"id": run_slug, "status": initial_status}
 
-    finding_rows: dict[str, Finding] = {}
+
+async def drain_queued_workflows(session: AsyncSession, *, limit: int = 1) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 25))
+    result = await session.execute(
+        select(WorkflowRun)
+        .where(WorkflowRun.status == "queued")
+        .order_by(WorkflowRun.created_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    queued = list(result.scalars().all())
+    processed: list[dict[str, Any]] = []
+    for row in queued:
+        run_id = _entity_slug(row.urn, WORKFLOW_RUN_URN_PREFIX)
+        run = await process_workflow_run(session, run_id)
+        if run is not None:
+            processed.append(run)
+    return processed
+
+
+async def process_workflow_run(session: AsyncSession, run_id: str) -> dict[str, Any] | None:
+    workflow_run = await _find_workflow_run(session, run_id)
+    if workflow_run is None:
+        return None
+    if workflow_run.status not in {"queued", "running"}:
+        return await workflow_run_by_id(session, run_id)
+
+    outputs = workflow_run.outputs or {}
+    template = _template_for(outputs.get("workflow_id", CODE_COMPLIANCE_SCAN["id"]))
+    asset = await session.get(Asset, workflow_run.asset_id)
+    if asset is None:
+        raise RuntimeError("workflow run asset is missing")
+
+    step_result = await session.execute(
+        select(StepRun).where(StepRun.workflow_run_id == workflow_run.id)
+    )
+    step_rows = list(step_result.scalars().all())
+    if not step_rows:
+        for step in template["steps"]:
+            session.add(
+                StepRun(
+                    workflow_run_id=workflow_run.id,
+                    step_id=step["id"],
+                    step_type=step["type"],
+                    status="pending",
+                    emitted_finding_ids=[],
+                    emitted_proposal_ids=[],
+                    inputs_redacted=_redacted_inputs(
+                        step,
+                        workflow_run.inputs,
+                        outputs.get("model_provider", get_settings().default_model_provider),
+                        outputs.get("model", get_settings().default_model_name),
+                    ),
+                    outputs_redacted={},
+                )
+            )
+        await session.flush()
+        step_result = await session.execute(
+            select(StepRun).where(StepRun.workflow_run_id == workflow_run.id)
+        )
+        step_rows = list(step_result.scalars().all())
+
+    workflow_run.status = "running"
+    await session.commit()
+
+    row_by_step = {row.step_id: row for row in step_rows}
+    context: dict[str, Any] = {"inputs": workflow_run.inputs, "steps": {}}
+    findings: list[dict[str, Any]] = list(outputs.get("findings", []))
+    proposals: list[dict[str, Any]] = list(outputs.get("proposed_changes", []))
+    model_provider = outputs.get("model_provider", get_settings().default_model_provider)
+    model = outputs.get("model", get_settings().default_model_name)
+    final_status = "succeeded"
+
+    for row in step_rows:
+        if row.status == "succeeded":
+            context["steps"][row.step_id] = {
+                "outputs": row.outputs_redacted,
+                "status": row.status,
+            }
+
+    while True:
+        pending = [
+            step
+            for step in template["steps"]
+            if row_by_step[step["id"]].status == "pending"
+            and all(context["steps"].get(dep, {}).get("status") == "succeeded" for dep in step.get("depends_on", []))
+        ]
+        if not pending:
+            break
+
+        for step in pending:
+            row_by_step[step["id"]].status = "running"
+        await session.commit()
+
+        results = await asyncio.gather(
+            *[
+                _execute_with_retries(
+                    step,
+                    context,
+                    model_provider=model_provider,
+                    model=model,
+                )
+                for step in pending
+            ]
+        )
+
+        for step, (step_outputs, step_status) in zip(pending, results, strict=True):
+            row = row_by_step[step["id"]]
+            emitted = step_outputs.get("emitted", [])
+            proposed = step_outputs.get("proposed_changes", [])
+            row.status = step_status
+            row.outputs_redacted = step_outputs
+            row.emitted_finding_ids = [
+                item["id"] for item in emitted if isinstance(item, dict) and "id" in item
+            ]
+            row.emitted_proposal_ids = [
+                item["id"] for item in proposed if isinstance(item, dict) and "id" in item
+            ]
+            context["steps"][step["id"]] = {"outputs": step_outputs, "status": step_status}
+            if step["type"] == "finding.emit" and isinstance(emitted, list):
+                findings.extend(item for item in emitted if isinstance(item, dict))
+            if step["type"] == "change.propose" and isinstance(proposed, list):
+                proposals.extend(item for item in proposed if isinstance(item, dict))
+            if step_status != "succeeded":
+                final_status = step_status
+
+        await session.commit()
+        if final_status != "succeeded":
+            break
+
+    if final_status == "succeeded":
+        incomplete = [row for row in row_by_step.values() if row.status in {"pending", "running"}]
+        final_status = "running" if incomplete else "succeeded"
+    if final_status in {"failed", "cancelled"}:
+        for row in row_by_step.values():
+            if row.status == "pending":
+                row.status = "blocked"
+
+    workflow_run.status = final_status
+    workflow_run.outputs = {
+        **outputs,
+        "findings": findings,
+        "proposed_changes": proposals,
+        "step_order": [step["id"] for step in template["steps"]],
+    }
+    await session.flush()
+    await _persist_findings_and_proposals(session, workflow_run, asset, findings, proposals)
+    await session.commit()
+    await session.refresh(workflow_run)
+
+    run = await workflow_run_by_id(session, run_id)
+    if run is None:
+        raise RuntimeError("workflow run was not persisted")
+
+    await _publish_run_events(session, asset, workflow_run, run, workflow_run.inputs)
+    from praetor_api.services import production_reviews
+
+    await production_reviews.sweep_evidence_records(session)
+    await session.commit()
+    return run
+
+
+async def _persist_findings_and_proposals(
+    session: AsyncSession,
+    workflow_run: WorkflowRun,
+    asset: Asset,
+    findings: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
+) -> None:
+    existing_finding_rows = await session.execute(
+        select(Finding).where(Finding.workflow_run_id == workflow_run.id)
+    )
+    finding_rows = {
+        _entity_slug(row.urn, FINDING_URN_PREFIX): row
+        for row in existing_finding_rows.scalars().all()
+    }
+
     for finding in findings:
+        finding_id = finding.get("id")
+        if not finding_id or finding_id in finding_rows:
+            continue
         finding_row = Finding(
-            urn=f"{FINDING_URN_PREFIX}{finding['id']}",
+            urn=f"{FINDING_URN_PREFIX}{finding_id}",
             workflow_run_id=workflow_run.id,
             asset_id=asset.id,
             title=finding["title"],
@@ -318,16 +501,33 @@ async def run_workflow(
             proposed_change_ids=[],
         )
         session.add(finding_row)
-        finding_rows[finding["id"]] = finding_row
+        finding_rows[finding_id] = finding_row
     await session.flush()
 
+    existing_proposals = await session.execute(
+        select(ProposedChange).where(
+            ProposedChange.urn.in_([
+                f"{PROPOSED_CHANGE_URN_PREFIX}{proposal['id']}"
+                for proposal in proposals
+                if isinstance(proposal, dict) and proposal.get("id")
+            ])
+        )
+    )
+    existing_proposal_ids = {
+        _entity_slug(row.urn, PROPOSED_CHANGE_URN_PREFIX)
+        for row in existing_proposals.scalars().all()
+    }
+
     for proposal in proposals:
+        proposal_id = proposal.get("id")
+        if not proposal_id or proposal_id in existing_proposal_ids:
+            continue
         finding_row = finding_rows.get(proposal.get("finding_id"))
         if finding_row is None:
             continue
         session.add(
             ProposedChange(
-                urn=f"{PROPOSED_CHANGE_URN_PREFIX}{proposal['id']}",
+                urn=f"{PROPOSED_CHANGE_URN_PREFIX}{proposal_id}",
                 finding_id=finding_row.id,
                 kind=proposal["kind"],
                 diff=proposal["diff"],
@@ -345,21 +545,8 @@ async def run_workflow(
         )
         finding_row.proposed_change_ids = [
             *list(finding_row.proposed_change_ids or []),
-            proposal["id"],
+            proposal_id,
         ]
-    await session.commit()
-    await session.refresh(workflow_run)
-
-    run = await workflow_run_by_id(session, run_slug)
-    if run is None:
-        raise RuntimeError("workflow run was not persisted")
-
-    await _publish_run_events(session, asset, workflow_run, run, inputs)
-    from praetor_api.services import production_reviews
-
-    await production_reviews.sweep_evidence_records(session)
-    await session.commit()
-    return run
 
 
 async def resume_workflow_run(
@@ -410,6 +597,13 @@ async def resume_workflow_run(
             await production_reviews.sweep_evidence_records(session)
             await session.commit()
         return run
+
+    workflow_run.status = "running"
+    for row in existing_steps:
+        if row.status == "blocked":
+            row.status = "pending"
+    await session.commit()
+    return await process_workflow_run(session, run_id)
 
     context: dict[str, Any] = {"inputs": workflow_run.inputs, "steps": {}}
     for row in existing_steps:

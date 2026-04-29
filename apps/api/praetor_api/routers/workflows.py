@@ -29,6 +29,10 @@ class ResumeWorkflowRequest(BaseModel):
     approver: str = "api"
 
 
+class DrainWorkflowRequest(BaseModel):
+    limit: int = 1
+
+
 @router.get("/workflows")
 async def workflows() -> list[dict[str, Any]]:
     if get_settings().data_mode == "production":
@@ -60,13 +64,22 @@ async def run_workflow(workflow_id: str, request: RunWorkflowRequest) -> dict[st
         async with AsyncSessionLocal() as session:
             if await production_workflows.get_workflow(session, workflow_id) is None:
                 raise HTTPException(status_code=404, detail="workflow not found")
-            run = await production_workflows.run_workflow(
-                session,
-                workflow_id,
-                request.inputs,
-                model_provider=request.model_provider or settings.default_model_provider,
-                model=request.model or settings.default_model_name,
-            )
+            if settings.workflow_execution_mode == "queued":
+                run = await production_workflows.enqueue_workflow_run(
+                    session,
+                    workflow_id,
+                    request.inputs,
+                    model_provider=request.model_provider or settings.default_model_provider,
+                    model=request.model or settings.default_model_name,
+                )
+            else:
+                run = await production_workflows.run_workflow(
+                    session,
+                    workflow_id,
+                    request.inputs,
+                    model_provider=request.model_provider or settings.default_model_provider,
+                    model=request.model or settings.default_model_name,
+                )
     else:
         if get_workflow(workflow_id) is None:
             raise HTTPException(status_code=404, detail="workflow not found")
@@ -77,6 +90,18 @@ async def run_workflow(workflow_id: str, request: RunWorkflowRequest) -> dict[st
             model=request.model or settings.default_model_name,
         )
     return {"workflow_run_id": run["id"]}
+
+
+@router.post("/workflow-runs:drain")
+async def drain_workflow_runs(request: DrainWorkflowRequest) -> dict[str, Any]:
+    if get_settings().data_mode != "production":
+        return {"processed": [], "count": 0}
+    async with AsyncSessionLocal() as session:
+        processed = await production_workflows.drain_queued_workflows(
+            session,
+            limit=request.limit,
+        )
+    return {"processed": processed, "count": len(processed)}
 
 
 @router.get("/workflow-runs")

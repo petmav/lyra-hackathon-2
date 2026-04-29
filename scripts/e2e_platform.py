@@ -86,6 +86,7 @@ def main() -> int:
         return value
 
     health = check("api health", lambda: require_keys(client.get("/health"), ["ok", "data_mode", "data_backend"]))
+    check("runtime config", lambda: require_keys(client.get("/runtime/config"), ["workflow_execution_mode", "agent_model_mode"]))
     check("runtime readiness", lambda: require_keys(client.get("/runtime/readiness"), ["models", "integrations", "ok"]))
     check("model registry", lambda: require_minimum(client.get("/models/providers"), 3, "model providers"))
     check("model offline check", lambda: require_true(client.post("/models:check", {"provider": "openai", "live": False})["ok"]))
@@ -183,6 +184,7 @@ def main() -> int:
     check("evidence sweep", lambda: require_true(client.post("/evidence-records:sweep")["ok"]))
     check("evidence records", lambda: require_list(client.get("/evidence-records"), "evidence records"))
     check("audit packet generate", lambda: require_keys(client.post("/audit-packets:generate"), ["id", "packet_hash", "signature"]))
+    check("workflow drain endpoint", lambda: require_keys(client.post("/workflow-runs:drain", {"limit": 1}), ["processed", "count"]))
 
     if not args.skip_web:
         for path in ["/", "/workflows", "/workflow-runs", "/hooks", "/hooks/validate", "/corpora", "/evidence", "/inventory", "/obligations", "/sandbox"]:

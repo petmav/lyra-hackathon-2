@@ -21,6 +21,10 @@ class Settings(BaseSettings):
         default="auto",
         alias="PRAETOR_AGENT_MODEL_MODE",
     )
+    workflow_execution_mode: Literal["sync", "queued"] = Field(
+        default="sync",
+        alias="PRAETOR_WORKFLOW_EXECUTION_MODE",
+    )
     pg_dsn: str = Field(
         default="postgresql+asyncpg://praetor:praetor@localhost:5432/praetor",
         alias="PG_DSN",
