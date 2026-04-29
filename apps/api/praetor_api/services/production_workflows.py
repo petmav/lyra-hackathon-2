@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import asyncio
 import hashlib
@@ -12,6 +13,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from praetor_api.models.asset import Asset
+from praetor_api.models.corpus import Corpus
+from praetor_api.models.document import Document
 from praetor_api.models.finding import Finding
 from praetor_api.models.policy_decision import PolicyDecision
 from praetor_api.models.proposed_change import ProposedChange
@@ -37,28 +40,36 @@ DEFAULT_STEP_LEASE_SECONDS = 300
 WORKFLOW_TEMPLATES: dict[str, dict[str, Any]] = {
     "code_compliance_scan": {
         **CODE_COMPLIANCE_SCAN,
+        "description": "Quick scan of a code repository against compliance corpora — pull, agent reasoning, emit findings.",
         "steps": [
-            {"id": "pull", "type": "hook.in", "with": {"repo_url": "{{ inputs.repo_url }}"}},
-            {"id": "scan", "type": "agent", "depends_on": ["pull"], "with": {"files": "{{ steps.pull.outputs.files }}"}},
-            {"id": "emit", "type": "finding.emit", "depends_on": ["scan"], "with": {"findings": "{{ steps.scan.outputs.findings }}"}},
+            # pre-assessment
+            {"id": "pull", "type": "hook.in", "with": {"hook_id": "github_stub", "operation": "fetch_repo", "repo_url": "{{ inputs.repo_url }}"}},
+            {"id": "retrieve_controls", "type": "corpus.query", "depends_on": ["pull"], "with": {"query": "tool argument validation and recipient guardrails", "corpora": ["iso_42001", "internal_data_min"], "k": 8}},
+            # assessment
+            {"id": "scan", "type": "agent", "depends_on": ["retrieve_controls"], "with": {"system_prompt_ref": "content/prompts/code_compliance_scanner.md", "tool_budget": 8}},
+            # post-assessment
+            {"id": "emit", "type": "finding.emit", "depends_on": ["scan"], "with": {}},
         ],
     },
     "code_compliance_scan_full": {
         "id": "code_compliance_scan_full",
         "urn": "urn:praetor:workflow:demo:code-compliance-scan-full",
         "name": "code_compliance_scan_full",
-        "description": "Pull code, retrieve controls, scan, propose a fix, gate it, and open a PR.",
+        "description": "Full remediation flow — pull code, retrieve obligations, scan, propose a code patch, run policy + human gates, then open a pull request.",
         "trigger": "manual",
         "required_hooks": ["github_stub"],
         "required_corpora": ["iso_42001", "internal_data_min"],
         "steps": [
-            {"id": "pull", "type": "hook.in", "with": {"repo_url": "{{ inputs.repo_url }}"}},
-            {"id": "retrieve_controls", "type": "corpus.query", "depends_on": ["pull"], "with": {"query": "recipient domain validation for email tools", "corpora": ["iso_42001", "internal_data_min"]}},
-            {"id": "scan", "type": "agent", "depends_on": ["retrieve_controls"], "with": {"files": "{{ steps.pull.outputs.files }}"}},
-            {"id": "emit", "type": "finding.emit", "depends_on": ["scan"], "with": {"findings": "{{ steps.scan.outputs.findings }}"}},
-            {"id": "propose", "type": "change.propose", "depends_on": ["emit"], "with": {"target": "tools.py"}},
-            {"id": "policy_gate", "type": "gate.policy", "depends_on": ["propose"], "with": {"severity": "high"}},
-            {"id": "human_gate", "type": "gate.human", "depends_on": ["policy_gate"], "with": {"role_required": "grc_reviewer"}},
+            # pre-assessment: pull source + cite obligations
+            {"id": "pull", "type": "hook.in", "with": {"hook_id": "github_stub", "operation": "fetch_repo", "repo_url": "{{ inputs.repo_url }}"}},
+            {"id": "retrieve_controls", "type": "corpus.query", "depends_on": ["pull"], "with": {"query": "recipient domain validation for email tools", "corpora": ["iso_42001", "internal_data_min"], "k": 8}},
+            # assessment: governed agent reasons in sandbox
+            {"id": "scan", "type": "agent", "depends_on": ["retrieve_controls"], "with": {"system_prompt_ref": "content/prompts/code_compliance_scanner.md", "tool_budget": 12}},
+            # post-assessment: emit, propose, gate, deliver
+            {"id": "emit", "type": "finding.emit", "depends_on": ["scan"], "with": {}},
+            {"id": "propose", "type": "change.propose", "depends_on": ["emit"], "with": {"target": "tools.py", "kind": "code"}},
+            {"id": "policy_gate", "type": "gate.policy", "depends_on": ["propose"], "with": {"policy_set": "praetor.controls.workflow_findings_gate", "severity": "high"}},
+            {"id": "human_gate", "type": "gate.human", "depends_on": ["policy_gate"], "with": {"role_required": "grc_reviewer", "timeout_minutes": 1440}},
             {"id": "open_pr", "type": "hook.out", "depends_on": ["human_gate"], "with": {"hook_id": "github_stub", "operation": "open_pr"}},
         ],
     },
@@ -66,52 +77,77 @@ WORKFLOW_TEMPLATES: dict[str, dict[str, Any]] = {
         "id": "vendor_risk_review",
         "urn": "urn:praetor:workflow:demo:vendor-risk-review",
         "name": "vendor_risk_review",
-        "description": "Retrieve vendor risk policy and emit any review findings.",
+        "description": "Vendor SOC2/ISO certification review — load the attestation, retrieve internal obligations, agent maps gaps and produces a remediation proposal.",
         "trigger": "manual",
-        "required_hooks": [],
-        "required_corpora": ["internal_data_min"],
+        "required_hooks": ["localfiles_stub"],
+        "required_corpora": ["iso_42001", "internal_data_min"],
         "steps": [
-            {"id": "retrieve_policy", "type": "corpus.query", "with": {"query": "vendor AI risk review", "corpora": ["internal_data_min"]}},
-            {"id": "emit", "type": "finding.emit", "depends_on": ["retrieve_policy"], "with": {"findings": []}},
+            # pre-assessment
+            {"id": "load_attestation", "type": "hook.in", "with": {"hook_id": "localfiles_stub", "operation": "fetch_document", "uri": "{{ inputs.soc2_uri }}"}},
+            {"id": "retrieve_obligations", "type": "corpus.query", "depends_on": ["load_attestation"], "with": {"query": "vendor risk attestations and shared-responsibility obligations", "corpora": ["iso_42001", "internal_data_min"], "k": 6}},
+            # assessment
+            {"id": "analyze", "type": "agent", "depends_on": ["retrieve_obligations"], "with": {"system_prompt_ref": "content/prompts/vendor_risk_reviewer.md", "tool_budget": 6}},
+            # post-assessment
+            {"id": "emit", "type": "finding.emit", "depends_on": ["analyze"], "with": {}},
+            {"id": "propose_remediation", "type": "change.propose", "depends_on": ["emit"], "with": {"target": "vendor_register.yaml", "kind": "process"}},
         ],
     },
     "policy_gap_analysis": {
         "id": "policy_gap_analysis",
         "urn": "urn:praetor:workflow:demo:policy-gap-analysis",
         "name": "policy_gap_analysis",
-        "description": "Retrieve controls and summarize policy gaps.",
+        "description": "New regulation or policy intake — retrieve existing controls, agent identifies gaps, and proposes new control text.",
         "trigger": "manual",
-        "required_hooks": [],
-        "required_corpora": ["iso_42001"],
+        "required_hooks": ["localfiles_stub"],
+        "required_corpora": ["iso_42001", "eu_ai_act"],
         "steps": [
-            {"id": "retrieve_controls", "type": "corpus.query", "with": {"query": "policy gap controls", "corpora": ["iso_42001"]}},
-            {"id": "summarize", "type": "transform", "depends_on": ["retrieve_controls"], "with": {"summary": "deterministic policy gap summary"}},
+            # pre-assessment
+            {"id": "load_regulation", "type": "hook.in", "with": {"hook_id": "localfiles_stub", "operation": "fetch_document", "uri": "{{ inputs.regulation_uri }}"}},
+            {"id": "retrieve_existing_controls", "type": "corpus.query", "depends_on": ["load_regulation"], "with": {"query": "existing internal controls for the obligation areas in scope", "corpora": ["iso_42001", "eu_ai_act"], "k": 10}},
+            # assessment
+            {"id": "analyze_gaps", "type": "agent", "depends_on": ["retrieve_existing_controls"], "with": {"system_prompt_ref": "content/prompts/policy_gap_analyst.md", "tool_budget": 8}},
+            # post-assessment
+            {"id": "emit", "type": "finding.emit", "depends_on": ["analyze_gaps"], "with": {}},
+            {"id": "propose_controls", "type": "change.propose", "depends_on": ["emit"], "with": {"target": "controls/registry.yaml", "kind": "policy"}},
+            {"id": "policy_gate", "type": "gate.policy", "depends_on": ["propose_controls"], "with": {"policy_set": "praetor.controls.policy_change", "severity": "medium"}},
+            {"id": "human_gate", "type": "gate.human", "depends_on": ["policy_gate"], "with": {"role_required": "grc_lead"}},
         ],
     },
     "evidence_collection": {
         "id": "evidence_collection",
         "urn": "urn:praetor:workflow:demo:evidence-collection",
         "name": "evidence_collection",
-        "description": "Collect evidence candidates from connected source systems.",
+        "description": "Sweep configured source systems for evidence candidates and bind them to obligations.",
         "trigger": "manual",
         "required_hooks": ["localfiles_stub"],
-        "required_corpora": [],
+        "required_corpora": ["iso_42001", "internal_data_min"],
         "steps": [
-            {"id": "read_files", "type": "hook.in", "with": {"repo_url": "stub://evidence"}},
-            {"id": "emit", "type": "finding.emit", "depends_on": ["read_files"], "with": {"findings": []}},
+            # pre-assessment
+            {"id": "read_files", "type": "hook.in", "with": {"hook_id": "localfiles_stub", "operation": "list_directory", "uri": "stub://evidence"}},
+            {"id": "retrieve_obligations", "type": "corpus.query", "depends_on": ["read_files"], "with": {"query": "evidence-bearing obligations for the active control set", "corpora": ["iso_42001", "internal_data_min"], "k": 12}},
+            # assessment
+            {"id": "organize", "type": "agent", "depends_on": ["retrieve_obligations"], "with": {"system_prompt_ref": "content/prompts/evidence_organizer.md", "tool_budget": 6}},
+            # post-assessment
+            {"id": "emit", "type": "finding.emit", "depends_on": ["organize"], "with": {}},
         ],
     },
     "ai_system_intake": {
         "id": "ai_system_intake",
         "urn": "urn:praetor:workflow:demo:ai-system-intake",
         "name": "ai_system_intake",
-        "description": "Classify a new AI system and run the first policy gate.",
+        "description": "Classify a newly-registered AI system, retrieve its applicable obligations, and gate a tier decision.",
         "trigger": "manual",
-        "required_hooks": [],
-        "required_corpora": [],
+        "required_hooks": ["localfiles_stub"],
+        "required_corpora": ["eu_ai_act", "iso_42001"],
         "steps": [
-            {"id": "classify", "type": "transform", "with": {"asset_type": "ai_system", "risk_tier": "L2"}},
-            {"id": "policy_gate", "type": "gate.policy", "depends_on": ["classify"], "with": {"severity": "medium"}},
+            # pre-assessment
+            {"id": "intake_form", "type": "hook.in", "with": {"hook_id": "localfiles_stub", "operation": "fetch_document", "uri": "{{ inputs.intake_uri }}"}},
+            {"id": "retrieve_obligations", "type": "corpus.query", "depends_on": ["intake_form"], "with": {"query": "high-risk classification triggers and AIMS obligations", "corpora": ["eu_ai_act", "iso_42001"], "k": 6}},
+            # assessment
+            {"id": "classify", "type": "agent", "depends_on": ["retrieve_obligations"], "with": {"system_prompt_ref": "content/prompts/ai_system_classifier.md", "tool_budget": 4}},
+            # post-assessment
+            {"id": "policy_gate", "type": "gate.policy", "depends_on": ["classify"], "with": {"policy_set": "praetor.controls.intake_classification", "severity": "medium"}},
+            {"id": "emit", "type": "finding.emit", "depends_on": ["policy_gate"], "with": {}},
         ],
     },
 }
@@ -126,12 +162,17 @@ def _entity_slug(urn: str, prefix: str) -> str:
 
 def _workflow_row_to_api(row: Workflow) -> dict[str, Any]:
     template = WORKFLOW_BY_URN.get(row.urn)
-    workflow_id = template["id"] if template else _entity_slug(row.urn, "urn:praetor:workflow:demo:")
+    workflow_id = template["id"] if template else _entity_slug(row.urn, "urn:praetor:workflow:custom:")
+    if workflow_id == row.urn:
+        workflow_id = _entity_slug(row.urn, "urn:praetor:workflow:demo:")
+    description = row.description or (template["description"] if template else row.name)
+    graph = row.graph or (compile_steps_to_graph(template["steps"]) if template else {"nodes": [], "edges": []})
+    steps = graph_to_steps(graph) if not template else template["steps"]
     return {
         "id": workflow_id,
         "urn": row.urn,
         "name": row.name,
-        "description": template["description"] if template else row.name,
+        "description": description,
         "definition": row.definition,
         "trigger": row.trigger,
         "trigger_config": row.trigger_config,
@@ -141,7 +182,120 @@ def _workflow_row_to_api(row: Workflow) -> dict[str, Any]:
         "required_corpora": row.required_corpora,
         "default_policy_set": row.default_policy_set,
         "template_origin": row.template_origin,
+        "graph": graph,
+        "steps": steps,
     }
+
+
+# ─── graph compilation ────────────────────────────────────────────────────
+#
+# Workflows execute as a typed DAG of steps. The graph form keeps the same
+# semantics but adds a phase tag (`pre`/`assess`/`post`) and a position so
+# the canvas can lay it out without re-deriving anything. Templates are
+# compiled into this form once at seed time; the runtime keeps consuming
+# the legacy `steps` list which we project back from the graph.
+
+PRE_TYPES = {"trigger.manual", "trigger.schedule", "trigger.webhook", "trigger.event", "hook.in", "corpus.query"}
+ASSESS_TYPES = {"agent", "model.complete", "agent.run"}
+POST_TYPES = {
+    "gate.policy",
+    "gate.human",
+    "sandbox.run",
+    "finding.emit",
+    "change.propose",
+    "evidence.generate",
+    "audit.packet",
+    "notify",
+    "hook.out",
+}
+
+PHASE_ORDER = {"pre": 0, "assess": 1, "post": 2}
+
+
+def _phase_for_step(step_type: str, has_assess: bool, seen_assess: bool) -> str:
+    if step_type in ASSESS_TYPES:
+        return "assess"
+    if step_type in PRE_TYPES:
+        return "pre"
+    if step_type in POST_TYPES:
+        return "post"
+    if step_type == "transform":
+        return "post" if seen_assess else "pre"
+    return "post" if seen_assess else "pre"
+
+
+def compile_steps_to_graph(steps: list[dict[str, Any]]) -> dict[str, Any]:
+    has_assess = any(step.get("type") in ASSESS_TYPES for step in steps)
+    seen_assess = False
+    nodes: list[dict[str, Any]] = []
+    by_phase: dict[str, list[str]] = {"pre": [], "assess": [], "post": []}
+    for step in steps:
+        step_type = str(step.get("type", "transform"))
+        phase = _phase_for_step(step_type, has_assess, seen_assess)
+        if phase == "assess":
+            seen_assess = True
+        node_id = str(step.get("id"))
+        nodes.append(
+            {
+                "id": node_id,
+                "type": step_type,
+                "phase": phase,
+                "label": str(step.get("label") or step.get("id") or step_type),
+                "config": dict(step.get("with") or {}),
+                "depends_on": list(step.get("depends_on") or []),
+                "position": {"x": 0, "y": 0},
+            }
+        )
+        by_phase[phase].append(node_id)
+
+    column_x = {"pre": 80, "assess": 380, "post": 680}
+    for phase, node_ids in by_phase.items():
+        for index, node_id in enumerate(node_ids):
+            for node in nodes:
+                if node["id"] == node_id:
+                    node["position"] = {"x": column_x[phase], "y": 80 + index * 140}
+                    break
+
+    edges: list[dict[str, Any]] = []
+    for node in nodes:
+        for parent in node.get("depends_on", []):
+            edges.append({"id": f"{parent}__{node['id']}", "from": parent, "to": node["id"], "kind": "control"})
+    return {"nodes": nodes, "edges": edges, "phases": ["pre", "assess", "post"]}
+
+
+def graph_to_steps(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+    deps_by_node: dict[str, list[str]] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        target = str(edge.get("to") or "")
+        source = str(edge.get("from") or "")
+        if not target or not source:
+            continue
+        deps_by_node.setdefault(target, []).append(source)
+    steps: list[dict[str, Any]] = []
+    ordered = sorted(
+        (n for n in nodes if isinstance(n, dict)),
+        key=lambda n: (PHASE_ORDER.get(n.get("phase", "pre"), 0), n.get("position", {}).get("y", 0)),
+    )
+    for node in ordered:
+        node_id = str(node.get("id"))
+        step: dict[str, Any] = {
+            "id": node_id,
+            "type": str(node.get("type") or "transform"),
+            "phase": str(node.get("phase") or "pre"),
+            "label": str(node.get("label") or node_id),
+        }
+        config = node.get("config") or {}
+        if isinstance(config, dict) and config:
+            step["with"] = dict(config)
+        deps = deps_by_node.get(node_id) or list(node.get("depends_on") or [])
+        if deps:
+            step["depends_on"] = deps
+        steps.append(step)
+    return steps
 
 
 async def _ensure_asset(session: AsyncSession) -> Asset:
@@ -172,12 +326,18 @@ async def ensure_workflow(session: AsyncSession, workflow_id: str = CODE_COMPLIA
     template = _template_for(workflow_id)
     result = await session.execute(select(Workflow).where(Workflow.urn == template["urn"]))
     workflow = result.scalar_one_or_none()
+    graph = compile_steps_to_graph(template["steps"])
     if workflow is not None:
+        if not workflow.graph:
+            workflow.graph = graph
+        if not workflow.description:
+            workflow.description = template.get("description")
         return workflow
 
     workflow = Workflow(
         urn=template["urn"],
         name=template["name"],
+        description=template.get("description"),
         definition=_definition_summary(template),
         trigger=template["trigger"],
         trigger_config={"mode": "manual"},
@@ -187,6 +347,7 @@ async def ensure_workflow(session: AsyncSession, workflow_id: str = CODE_COMPLIA
         required_corpora=template["required_corpora"],
         default_policy_set="praetor-demo",
         template_origin="apps/workflow/templates",
+        graph=graph,
     )
     session.add(workflow)
     await session.flush()
@@ -194,17 +355,349 @@ async def ensure_workflow(session: AsyncSession, workflow_id: str = CODE_COMPLIA
 
 
 async def list_workflows(session: AsyncSession) -> list[dict[str, Any]]:
-    workflows = [await ensure_workflow(session, workflow_id) for workflow_id in WORKFLOW_TEMPLATES]
+    seeded = [await ensure_workflow(session, workflow_id) for workflow_id in WORKFLOW_TEMPLATES]
     await session.commit()
-    return [_workflow_row_to_api(workflow) for workflow in workflows]
+    seeded_urns = {row.urn for row in seeded}
+    extra_result = await session.execute(
+        select(Workflow).where(Workflow.urn.notin_(seeded_urns)).order_by(Workflow.created_at)
+    )
+    extras = list(extra_result.scalars().all())
+    return [_workflow_row_to_api(workflow) for workflow in [*seeded, *extras]]
 
 
 async def get_workflow(session: AsyncSession, workflow_id: str) -> dict[str, Any] | None:
-    if workflow_id not in WORKFLOW_TEMPLATES and workflow_id not in WORKFLOW_BY_URN:
+    if workflow_id in WORKFLOW_TEMPLATES or workflow_id in WORKFLOW_BY_URN:
+        workflow = await ensure_workflow(session, workflow_id)
+        await session.commit()
+        return _workflow_row_to_api(workflow)
+    filters = [Workflow.urn == workflow_id]
+    try:
+        filters.append(Workflow.id == UUID(workflow_id))
+    except ValueError:
+        pass
+    custom_urn = f"urn:praetor:workflow:custom:{workflow_id}"
+    filters.append(Workflow.urn == custom_urn)
+    result = await session.execute(select(Workflow).where(or_(*filters)))
+    workflow = result.scalar_one_or_none()
+    if workflow is None:
         return None
-    workflow = await ensure_workflow(session, workflow_id)
-    await session.commit()
     return _workflow_row_to_api(workflow)
+
+
+async def create_custom_workflow(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    explicit_id = str(payload.get("id") or "").strip()
+    workflow_id = explicit_id or _slugify_workflow_id(name)
+    if workflow_id in WORKFLOW_TEMPLATES:
+        raise ValueError(f"workflow id '{workflow_id}' is reserved by a template")
+    urn = f"urn:praetor:workflow:custom:{workflow_id}"
+    existing_result = await session.execute(select(Workflow).where(Workflow.urn == urn))
+    if existing_result.scalar_one_or_none() is not None:
+        raise ValueError(f"workflow '{workflow_id}' already exists")
+
+    graph_payload = payload.get("graph") or {}
+    if not isinstance(graph_payload, dict):
+        raise ValueError("graph must be an object")
+    nodes = graph_payload.get("nodes") or []
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("graph must contain at least one node")
+    edges = graph_payload.get("edges") or []
+    graph = _normalize_graph_payload(nodes, edges)
+    steps = graph_to_steps(graph)
+    description = str(payload.get("description") or "").strip()
+    trigger = payload.get("trigger", "manual")
+    if trigger not in {"manual", "schedule", "webhook", "event"}:
+        trigger = "manual"
+
+    workflow = Workflow(
+        urn=urn,
+        name=name,
+        description=description or None,
+        definition=" -> ".join(step["id"] for step in steps),
+        trigger=trigger,
+        trigger_config=dict(payload.get("trigger_config") or {"mode": trigger}),
+        inputs_schema=dict(payload.get("inputs_schema") or {"type": "object"}),
+        outputs_schema=dict(payload.get("outputs_schema") or {"type": "object"}),
+        required_hooks=list(payload.get("required_hooks") or []),
+        required_corpora=list(payload.get("required_corpora") or []),
+        default_policy_set=str(payload.get("default_policy_set") or "praetor-demo"),
+        template_origin="user-defined",
+        graph=graph,
+    )
+    session.add(workflow)
+    await session.commit()
+    await session.refresh(workflow)
+    return _workflow_row_to_api(workflow)
+
+
+async def update_custom_workflow(
+    session: AsyncSession, workflow_id: str, patch: dict[str, Any]
+) -> dict[str, Any] | None:
+    if workflow_id in WORKFLOW_TEMPLATES:
+        raise ValueError("template workflows cannot be edited; clone first")
+    urn = f"urn:praetor:workflow:custom:{workflow_id}"
+    filters = [Workflow.urn == urn, Workflow.urn == workflow_id]
+    try:
+        filters.append(Workflow.id == UUID(workflow_id))
+    except ValueError:
+        pass
+    result = await session.execute(select(Workflow).where(or_(*filters)))
+    workflow = result.scalar_one_or_none()
+    if workflow is None:
+        return None
+    if "name" in patch and patch["name"]:
+        workflow.name = str(patch["name"])
+    if "description" in patch:
+        workflow.description = str(patch["description"]) if patch["description"] else None
+    if "trigger" in patch and patch["trigger"]:
+        workflow.trigger = str(patch["trigger"])
+    if "required_hooks" in patch and isinstance(patch["required_hooks"], list):
+        workflow.required_hooks = [str(h) for h in patch["required_hooks"]]
+    if "required_corpora" in patch and isinstance(patch["required_corpora"], list):
+        workflow.required_corpora = [str(c) for c in patch["required_corpora"]]
+    if "graph" in patch and isinstance(patch["graph"], dict):
+        nodes = patch["graph"].get("nodes") or []
+        edges = patch["graph"].get("edges") or []
+        if not isinstance(nodes, list) or not nodes:
+            raise ValueError("graph must contain at least one node")
+        graph = _normalize_graph_payload(nodes, edges)
+        workflow.graph = graph
+        workflow.definition = " -> ".join(step["id"] for step in graph_to_steps(graph))
+    await session.commit()
+    await session.refresh(workflow)
+    return _workflow_row_to_api(workflow)
+
+
+async def delete_custom_workflow(session: AsyncSession, workflow_id: str) -> bool:
+    if workflow_id in WORKFLOW_TEMPLATES:
+        return False
+    urn = f"urn:praetor:workflow:custom:{workflow_id}"
+    result = await session.execute(select(Workflow).where(Workflow.urn == urn))
+    workflow = result.scalar_one_or_none()
+    if workflow is None:
+        return False
+    await session.delete(workflow)
+    await session.commit()
+    return True
+
+
+def _slugify_workflow_id(value: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "_" for ch in value)
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned.strip("_") or "custom_workflow"
+
+
+def _normalize_graph_payload(nodes: list[Any], edges: list[Any]) -> dict[str, Any]:
+    seen_ids: set[str] = set()
+    normalized_nodes: list[dict[str, Any]] = []
+    for raw in nodes:
+        if not isinstance(raw, dict):
+            continue
+        node_id = str(raw.get("id") or "").strip()
+        if not node_id or node_id in seen_ids:
+            raise ValueError(f"duplicate or missing node id: {node_id!r}")
+        seen_ids.add(node_id)
+        node_type = str(raw.get("type") or "transform")
+        phase = str(raw.get("phase") or "pre")
+        if phase not in {"pre", "assess", "post"}:
+            phase = "pre"
+        position = raw.get("position") or {}
+        x = float(position.get("x", 0)) if isinstance(position, dict) else 0
+        y = float(position.get("y", 0)) if isinstance(position, dict) else 0
+        config = raw.get("config")
+        if not isinstance(config, dict):
+            config = {}
+        depends_on = raw.get("depends_on") or []
+        if not isinstance(depends_on, list):
+            depends_on = []
+        normalized_nodes.append(
+            {
+                "id": node_id,
+                "type": node_type,
+                "phase": phase,
+                "label": str(raw.get("label") or node_id),
+                "config": dict(config),
+                "depends_on": [str(d) for d in depends_on if isinstance(d, str)],
+                "position": {"x": x, "y": y},
+            }
+        )
+
+    valid_ids = {n["id"] for n in normalized_nodes}
+    normalized_edges: list[dict[str, Any]] = []
+    seen_edges: set[str] = set()
+    for raw in edges:
+        if not isinstance(raw, dict):
+            continue
+        source = str(raw.get("from") or "")
+        target = str(raw.get("to") or "")
+        if source not in valid_ids or target not in valid_ids:
+            continue
+        kind = str(raw.get("kind") or "control")
+        if kind not in {"data", "control", "approval", "error"}:
+            kind = "control"
+        edge_id = str(raw.get("id") or f"{source}__{target}")
+        if edge_id in seen_edges:
+            continue
+        seen_edges.add(edge_id)
+        normalized_edges.append({"id": edge_id, "from": source, "to": target, "kind": kind})
+
+    # Cycle detection
+    adjacency: dict[str, list[str]] = {nid: [] for nid in valid_ids}
+    for edge in normalized_edges:
+        adjacency[edge["from"]].append(edge["to"])
+    indegree = {nid: 0 for nid in valid_ids}
+    for sources in adjacency.values():
+        for target in sources:
+            indegree[target] += 1
+    ready = [nid for nid, deg in indegree.items() if deg == 0]
+    visited = 0
+    while ready:
+        current = ready.pop()
+        visited += 1
+        for neighbor in adjacency[current]:
+            indegree[neighbor] -= 1
+            if indegree[neighbor] == 0:
+                ready.append(neighbor)
+    if visited != len(valid_ids):
+        raise ValueError("graph contains a cycle")
+
+    return {"nodes": normalized_nodes, "edges": normalized_edges, "phases": ["pre", "assess", "post"]}
+
+
+# ─── prefab node catalog ──────────────────────────────────────────────────
+#
+# A small, typed catalog of node types the form/visual editor surfaces.
+# Each entry declares its phase, expected `with` keys, and a one-line summary
+# so the UI can render a property panel without ad-hoc per-type knowledge.
+
+NODE_CATALOG: list[dict[str, Any]] = [
+    {
+        "type": "trigger.manual",
+        "phase": "pre",
+        "label": "Manual trigger",
+        "summary": "Workflow runs when a user instantiates it from the UI.",
+        "config_schema": {},
+    },
+    {
+        "type": "trigger.schedule",
+        "phase": "pre",
+        "label": "Schedule trigger",
+        "summary": "Workflow runs on a cron-style schedule.",
+        "config_schema": {"cron": "string", "timezone": "string"},
+    },
+    {
+        "type": "trigger.webhook",
+        "phase": "pre",
+        "label": "Webhook trigger",
+        "summary": "Workflow runs when an external service POSTs to a tenant URL.",
+        "config_schema": {"path": "string"},
+    },
+    {
+        "type": "hook.in",
+        "phase": "pre",
+        "label": "Inbound hook",
+        "summary": "Pulls source data from a connected integration (repo, ticket, doc).",
+        "config_schema": {"hook_id": "string", "operation": "string", "repo_url": "string"},
+    },
+    {
+        "type": "corpus.query",
+        "phase": "pre",
+        "label": "Corpus query",
+        "summary": "Retrieves obligation/policy excerpts as governed citations.",
+        "config_schema": {"query": "string", "corpora": "list[string]", "k": "number"},
+    },
+    {
+        "type": "transform",
+        "phase": "pre",
+        "label": "Transform",
+        "summary": "Deterministic shaping/normalisation of upstream data.",
+        "config_schema": {"expression": "string"},
+    },
+    {
+        "type": "agent",
+        "phase": "assess",
+        "label": "Agent step (sandboxed)",
+        "summary": "Runs the governed model agent in an isolated sandbox.",
+        "config_schema": {"system_prompt_ref": "string", "tool_budget": "number"},
+    },
+    {
+        "type": "model.complete",
+        "phase": "assess",
+        "label": "Single model call",
+        "summary": "One provider-neutral completion for deterministic reasoning.",
+        "config_schema": {"prompt": "string", "provider": "string", "model": "string"},
+    },
+    {
+        "type": "gate.policy",
+        "phase": "post",
+        "label": "Policy gate",
+        "summary": "OPA / policy-service decision point.",
+        "config_schema": {"policy_set": "string", "severity": "string"},
+    },
+    {
+        "type": "gate.human",
+        "phase": "post",
+        "label": "Human approval",
+        "summary": "Pauses the run until an approver decides.",
+        "config_schema": {"role_required": "string", "timeout_minutes": "number"},
+    },
+    {
+        "type": "sandbox.run",
+        "phase": "post",
+        "label": "Sandbox replay",
+        "summary": "Replays a proposed change inside a sandbox container.",
+        "config_schema": {"image": "string", "command": "string"},
+    },
+    {
+        "type": "finding.emit",
+        "phase": "post",
+        "label": "Emit finding",
+        "summary": "Persists structured findings with citations and confidence.",
+        "config_schema": {"findings": "list[object]"},
+    },
+    {
+        "type": "change.propose",
+        "phase": "post",
+        "label": "Propose change",
+        "summary": "Generates a patch/config/policy proposal addressed to obligations.",
+        "config_schema": {"target": "string", "kind": "string"},
+    },
+    {
+        "type": "evidence.generate",
+        "phase": "post",
+        "label": "Generate evidence",
+        "summary": "Binds events, decisions and citations into an evidence record.",
+        "config_schema": {"obligation_urns": "list[string]"},
+    },
+    {
+        "type": "audit.packet",
+        "phase": "post",
+        "label": "Audit packet",
+        "summary": "Assembles signed audit material across the run.",
+        "config_schema": {"label": "string"},
+    },
+    {
+        "type": "hook.out",
+        "phase": "post",
+        "label": "Outbound hook",
+        "summary": "Sends the approved output to a connected system (PR, ticket, message).",
+        "config_schema": {"hook_id": "string", "operation": "string"},
+    },
+    {
+        "type": "notify",
+        "phase": "post",
+        "label": "Notify",
+        "summary": "Sends a message via Slack, Teams, email, or webhook.",
+        "config_schema": {"channel": "string", "subject": "string"},
+    },
+]
+
+
+def list_node_catalog() -> list[dict[str, Any]]:
+    return [dict(entry) for entry in NODE_CATALOG]
 
 
 def _finding_payload(finding_slug: str) -> dict[str, Any]:
@@ -1415,6 +1908,8 @@ async def _run_agent_step_in_sandbox(
     workflow_agent = await _ensure_workflow_agent_asset(session, workflow_run, step)
     run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
     finding = _finding_payload(finding_slug)
+    selected_corpora = _selected_corpora_for_step(step, context)
+    documents = await _collect_workflow_documents(session, selected_corpora)
     manifest = _agent_sandbox_manifest(
         workflow_run,
         workflow_agent,
@@ -1423,6 +1918,7 @@ async def _run_agent_step_in_sandbox(
         model_provider=model_provider,
         model=model,
         expected_finding=finding,
+        documents=documents,
     )
     launch = await _launch_sandbox(manifest)
     sandbox = SandboxRun(
@@ -1511,11 +2007,13 @@ def _agent_sandbox_manifest(
     model_provider: str,
     model: str,
     expected_finding: dict[str, Any],
+    documents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
     step_id = str(step["id"])
     prior_steps = context.get("steps", {})
+    documents = documents or []
     agent_payload = {
         "workflow_run_id": run_slug,
         "step_id": step_id,
@@ -1528,6 +2026,7 @@ def _agent_sandbox_manifest(
             for step_name, state in prior_steps.items()
         },
         "workflow_inputs": context.get("inputs", {}),
+        "documents": documents,
     }
     return {
         "mode": "agent_step",
@@ -1568,6 +2067,7 @@ def _agent_sandbox_manifest(
             ],
             "memory": {"kind": "ephemeral_vector", "store_id": f"{run_slug}-{step_id}"},
             "corpora": _corpora_from_context(prior_steps),
+            "documents": [_document_summary(d) for d in documents],
         },
         "agent_payload": agent_payload,
         "inputs": {
@@ -1577,10 +2077,36 @@ def _agent_sandbox_manifest(
                 for step_name, state in prior_steps.items()
             },
             "step": step,
+            "documents": documents,
         },
         "expected_output_schema": {"findings": "list[Finding]"},
         "policy_set": "praetor.controls.workflow_agent_step",
     }
+
+
+def _document_summary(document: dict[str, Any]) -> dict[str, Any]:
+    """Strip base64 payload from the agent.* manifest summary (it is still
+    available in inputs.documents and agent_payload.documents). Keeps the
+    summary block small enough to log without flooding traces."""
+    return {
+        key: value
+        for key, value in document.items()
+        if key not in {"base64"}
+    }
+
+
+def _selected_corpora_for_step(step: dict[str, Any], context: dict[str, Any]) -> list[str]:
+    """Determine which corpora's uploaded documents to bundle for this agent
+    step. Honours an explicit `with.corpora` list on the step, then any
+    upstream corpus.query selection, and finally the workflow inputs."""
+    explicit = step.get("with", {}).get("corpora")
+    if isinstance(explicit, list) and explicit:
+        return [str(c) for c in explicit if isinstance(c, str)]
+    workflow_inputs = context.get("inputs", {}) or {}
+    if isinstance(workflow_inputs.get("corpus_ids"), list):
+        return [str(c) for c in workflow_inputs["corpus_ids"] if isinstance(c, str)]
+    upstream = _corpora_from_context(context.get("steps", {}))
+    return upstream
 
 
 def _agent_output_from_sandbox_launch(
@@ -1765,6 +2291,62 @@ def _corpora_from_context(prior_steps: dict[str, Any]) -> list[str]:
             if isinstance(hit, dict) and isinstance(hit.get("corpus_id"), str):
                 corpora.append(hit["corpus_id"])
     return sorted(set(corpora))
+
+
+# Per-document and total caps when bundling uploaded documents into the agent
+# sandbox manifest. Above these limits the document is referenced by path
+# only — the sandbox can still mount it but we don't inline the bytes.
+_INLINE_DOC_BYTES = 5 * 1024 * 1024
+_INLINE_TOTAL_BYTES = 25 * 1024 * 1024
+
+
+async def _collect_workflow_documents(
+    session: AsyncSession | None, corpus_ids: list[str]
+) -> list[dict[str, Any]]:
+    """Bundle uploaded documents from the workflow's selected corpora so the
+    agent sandbox receives them at run time. Inlines bytes (base64) for
+    documents under the per-doc cap; otherwise returns a metadata-only entry
+    pointing at the on-disk path."""
+    if not corpus_ids or session is None:
+        return []
+    from praetor_api.services.production_corpus import (
+        CORPUS_URN_PREFIX,
+        DOCUMENT_URN_PREFIX,
+        _external_id,
+    )
+
+    urn_filters = [f"{CORPUS_URN_PREFIX}{cid}" for cid in corpus_ids]
+    corpus_result = await session.execute(select(Corpus).where(Corpus.urn.in_(urn_filters)))
+    corpora = list(corpus_result.scalars().all())
+    if not corpora:
+        return []
+    corpus_index = {c.id: _external_id(c.urn, CORPUS_URN_PREFIX) for c in corpora}
+    docs_result = await session.execute(
+        select(Document).where(Document.corpus_id.in_(list(corpus_index.keys())))
+    )
+    bundled: list[dict[str, Any]] = []
+    total = 0
+    for doc in docs_result.scalars().all():
+        size = int(doc.size_bytes or 0)
+        entry: dict[str, Any] = {
+            "document_id": _external_id(doc.urn, DOCUMENT_URN_PREFIX),
+            "corpus_id": corpus_index.get(doc.corpus_id, ""),
+            "title": doc.title,
+            "source_uri": doc.source_uri,
+            "media_type": doc.media_type or "application/octet-stream",
+            "size_bytes": size,
+            "binary_path": doc.binary_path,
+            "content_hash": doc.content_hash,
+        }
+        if doc.binary_path and size and size <= _INLINE_DOC_BYTES and total + size <= _INLINE_TOTAL_BYTES:
+            try:
+                with open(doc.binary_path, "rb") as fh:
+                    entry["base64"] = base64.b64encode(fh.read()).decode("ascii")
+                total += size
+            except OSError:
+                entry["base64_error"] = "unreadable"
+        bundled.append(entry)
+    return bundled
 
 
 def _parse_dt(value: Any) -> datetime | None:

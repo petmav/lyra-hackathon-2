@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { notFound, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type { Workflow } from "@/lib/api/types";
@@ -10,6 +11,9 @@ import { Badge } from "@/components/primitives/Badge";
 import { Button } from "@/components/primitives/Button";
 import { Hairline } from "@/components/primitives/Hairline";
 import { Urn } from "@/components/data/Urn";
+import { WorkflowSwimlanes } from "@/components/workflow-graph/WorkflowSwimlanes";
+import { WorkflowCanvas } from "@/components/workflow-graph/WorkflowCanvas";
+import { Pencil } from "lucide-react";
 
 export default function WorkflowPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -49,19 +53,45 @@ export default function WorkflowPage({ params }: { params: Promise<{ id: string 
     <div>
       <PageHeader
         number="03.t"
-        kicker={`Template / ${workflow.trigger}`}
+        kicker={`${workflow.template_origin === "user-defined" ? "Custom" : "Template"} / ${workflow.trigger}`}
         title={workflow.name}
         subtitle={workflow.description}
         aside={
           <div className="flex flex-col items-end gap-2">
             <Urn urn={workflow.urn} />
-            <Button variant="primary" onClick={instantiateRun} disabled={running}>
-              {running ? "instantiating" : "instantiate run"}
-            </Button>
+            <div className="flex items-center gap-2">
+              {workflow.template_origin === "user-defined" && (
+                <Link href={`/workflows/${workflow.id}/edit`}>
+                  <Button variant="ghost" size="sm">
+                    <Pencil size={11} strokeWidth={1.75} />
+                    edit
+                  </Button>
+                </Link>
+              )}
+              <Button variant="primary" onClick={instantiateRun} disabled={running}>
+                {running ? "instantiating" : "instantiate run"}
+              </Button>
+            </div>
             {runError && <span className="max-w-[280px] text-right text-[11px] text-crit">{runError}</span>}
           </div>
         }
       />
+
+      {workflow.graph && workflow.graph.nodes.length > 0 && (
+        <Section number="a" eyebrow="Graph" title="Pre · Assess · Post" className="!py-0 mt-6">
+          <div className="space-y-3">
+            <WorkflowCanvas graph={workflow.graph} />
+            <details className="group">
+              <summary className="cursor-pointer text-[11px] uppercase tracking-[0.08em] text-paper-fade hover:text-paper">
+                Show static swimlane render
+              </summary>
+              <div className="mt-3">
+                <WorkflowSwimlanes graph={workflow.graph} />
+              </div>
+            </details>
+          </div>
+        </Section>
+      )}
 
       <div className="mt-10 grid gap-6 lg:grid-cols-[2fr_1fr]">
         <Section number="a" eyebrow="Definition" title={<>YAML</>} className="!py-0 mt-2">

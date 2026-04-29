@@ -246,6 +246,25 @@ export const api = {
       }
       await sleep();
       return fxObligations.find((o) => o.urn === urn) ?? null;
+    },
+    async create(payload: Partial<Obligation> & { framework: string; citation: string; text: string }): Promise<Obligation> {
+      if (!USE_API) throw new Error("Creating obligations requires the API data source.");
+      return request<Obligation>("/obligations", { method: "POST", body: JSON.stringify(payload) });
+    },
+    async update(urn: string, patch: Partial<Obligation>): Promise<Obligation> {
+      if (!USE_API) throw new Error("Editing obligations requires the API data source.");
+      return request<Obligation>(`/obligations/${encodeURIComponent(urn)}`, { method: "PATCH", body: JSON.stringify(patch) });
+    },
+    async remove(urn: string): Promise<void> {
+      if (!USE_API) throw new Error("Deleting obligations requires the API data source.");
+      await request<void>(`/obligations/${encodeURIComponent(urn)}`, { method: "DELETE" });
+    },
+    async importYaml(yamlText: string, framework?: string): Promise<{ created: Obligation[]; updated: Obligation[]; skipped: number }> {
+      if (!USE_API) throw new Error("YAML import requires the API data source.");
+      return request("/obligations:import-yaml", {
+        method: "POST",
+        body: JSON.stringify({ yaml: yamlText, framework })
+      });
     }
   },
   controls: {
@@ -295,6 +314,45 @@ export const api = {
       await sleep();
       // demo: returns the existing running run id
       return { workflow_run_id: "wfr_2026_04_28_001" };
+    },
+    async create(payload: {
+      name: string;
+      id?: string;
+      description?: string;
+      trigger?: string;
+      required_hooks?: string[];
+      required_corpora?: string[];
+      graph: { nodes: unknown[]; edges: unknown[] };
+    }): Promise<Workflow> {
+      if (!USE_API) throw new Error("Creating workflows requires the API data source.");
+      const row = await request<Record<string, unknown>>("/workflows", { method: "POST", body: JSON.stringify(payload) });
+      return normalizeWorkflow(row);
+    },
+    async update(id: string, patch: Record<string, unknown>): Promise<Workflow> {
+      if (!USE_API) throw new Error("Editing workflows requires the API data source.");
+      const row = await request<Record<string, unknown>>(`/workflows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
+      return normalizeWorkflow(row);
+    },
+    async remove(id: string): Promise<void> {
+      if (!USE_API) throw new Error("Deleting workflows requires the API data source.");
+      await request<void>(`/workflows/${encodeURIComponent(id)}`, { method: "DELETE" });
+    },
+    async nodeCatalog(): Promise<Array<{
+      type: string;
+      phase: "pre" | "assess" | "post";
+      label: string;
+      summary: string;
+      config_schema: Record<string, string>;
+    }>> {
+      if (!USE_API) {
+        // Local fallback so the editor works in fixture mode too.
+        return DEFAULT_NODE_CATALOG;
+      }
+      try {
+        return await request("/workflows/nodes/catalog");
+      } catch {
+        return DEFAULT_NODE_CATALOG;
+      }
     }
   },
   workflowRuns: {
@@ -446,6 +504,28 @@ export const api = {
 
   // ─── corpora & documents ─────────────────────────────────────────────
   corpora: {
+    async create(payload: { name: string; kind?: string; description?: string; framework?: string; jurisdiction?: string; retention?: string; source_url?: string; id?: string }): Promise<Corpus> {
+      if (!USE_API) throw new Error("Creating corpora requires the API data source.");
+      const row = await request<Record<string, unknown>>("/corpora", { method: "POST", body: JSON.stringify(payload) });
+      return normalizeCorpus(row);
+    },
+    async remove(id: string): Promise<void> {
+      if (!USE_API) throw new Error("Deleting corpora requires the API data source.");
+      await request<void>(`/corpora/${encodeURIComponent(id)}`, { method: "DELETE" });
+    },
+    async upload(corpusId: string, file: File): Promise<{ id: string; title: string; size_bytes?: number; media_type?: string; chunk_count: number }> {
+      if (!USE_API || !API_BASE) throw new Error("Document upload requires the API data source.");
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(`${API_BASE}/corpora/${encodeURIComponent(corpusId)}/documents:upload`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+        body: form
+      });
+      if (!response.ok) throw new Error(`Upload failed: ${response.status} ${await response.text()}`);
+      return response.json();
+    },
     async list(): Promise<Corpus[]> {
       const rows = await backendOrFixture<Array<Record<string, unknown>>>("/corpora", async () => {
         await sleep();
@@ -616,12 +696,26 @@ export const api = {
   },
   auditPackets: {
     async list(): Promise<AuditPacket[]> {
-      if (!USE_FIXTURES && !ALLOW_FIXTURE_FALLBACK) return [];
+      if (USE_API) {
+        try {
+          const rows = await request<Array<Record<string, unknown>>>("/audit-packets");
+          return rows.map(normalizeAuditPacket);
+        } catch {
+          if (!ALLOW_FIXTURE_FALLBACK) return [];
+        }
+      }
       await sleep();
       return fxAuditPackets;
     },
     async get(id: string): Promise<AuditPacket | null> {
-      if (!USE_FIXTURES && !ALLOW_FIXTURE_FALLBACK) return null;
+      if (USE_API) {
+        try {
+          const row = await request<Record<string, unknown>>(`/audit-packets/${encodeURIComponent(id)}`);
+          return normalizeAuditPacket(row);
+        } catch {
+          if (!ALLOW_FIXTURE_FALLBACK) return null;
+        }
+      }
       await sleep();
       return fxAuditPackets.find((p) => p.id === id) ?? null;
     },
@@ -636,9 +730,17 @@ export const api = {
   },
 
   // ─── alerts (UI-derived) ─────────────────────────────────────────────
+  // The backend exposes /alerts which derives from open findings + proposed
+  // changes awaiting approval — single round trip, no client-side fan-out.
   alerts: {
     async list(): Promise<Alert[]> {
-      if (!USE_FIXTURES && !ALLOW_FIXTURE_FALLBACK) return [];
+      if (USE_API) {
+        try {
+          return await request<Alert[]>("/alerts");
+        } catch {
+          if (!ALLOW_FIXTURE_FALLBACK) return [];
+        }
+      }
       await sleep();
       return fxAlerts;
     }
@@ -698,6 +800,32 @@ function normalizeEvidenceRecord(row: Record<string, unknown>): EvidenceRecord {
   };
 }
 
+const DEFAULT_NODE_CATALOG: Array<{
+  type: string;
+  phase: "pre" | "assess" | "post";
+  label: string;
+  summary: string;
+  config_schema: Record<string, string>;
+}> = [
+  { type: "trigger.manual", phase: "pre", label: "Manual trigger", summary: "Workflow runs when a user instantiates it from the UI.", config_schema: {} },
+  { type: "trigger.schedule", phase: "pre", label: "Schedule trigger", summary: "Runs on a cron-style schedule.", config_schema: { cron: "string", timezone: "string" } },
+  { type: "trigger.webhook", phase: "pre", label: "Webhook trigger", summary: "Runs when an external service POSTs to a tenant URL.", config_schema: { path: "string" } },
+  { type: "hook.in", phase: "pre", label: "Inbound hook", summary: "Pulls source data from a connected integration.", config_schema: { hook_id: "string", operation: "string", repo_url: "string" } },
+  { type: "corpus.query", phase: "pre", label: "Corpus query", summary: "Retrieves obligation/policy excerpts.", config_schema: { query: "string", corpora: "list[string]", k: "number" } },
+  { type: "transform", phase: "pre", label: "Transform", summary: "Deterministic data shaping.", config_schema: { expression: "string" } },
+  { type: "agent", phase: "assess", label: "Agent step (sandboxed)", summary: "Runs the model agent in an isolated sandbox.", config_schema: { system_prompt_ref: "string", tool_budget: "number" } },
+  { type: "model.complete", phase: "assess", label: "Single model call", summary: "One provider-neutral completion.", config_schema: { prompt: "string", provider: "string", model: "string" } },
+  { type: "gate.policy", phase: "post", label: "Policy gate", summary: "OPA / policy-service decision.", config_schema: { policy_set: "string", severity: "string" } },
+  { type: "gate.human", phase: "post", label: "Human approval", summary: "Pauses run until an approver decides.", config_schema: { role_required: "string", timeout_minutes: "number" } },
+  { type: "sandbox.run", phase: "post", label: "Sandbox replay", summary: "Replays a proposed change in a container.", config_schema: { image: "string", command: "string" } },
+  { type: "finding.emit", phase: "post", label: "Emit finding", summary: "Persists structured findings.", config_schema: {} },
+  { type: "change.propose", phase: "post", label: "Propose change", summary: "Generates a patch/config/policy proposal.", config_schema: { target: "string", kind: "string" } },
+  { type: "evidence.generate", phase: "post", label: "Generate evidence", summary: "Binds events into an evidence record.", config_schema: { obligation_urns: "list[string]" } },
+  { type: "audit.packet", phase: "post", label: "Audit packet", summary: "Assembles signed audit material.", config_schema: { label: "string" } },
+  { type: "hook.out", phase: "post", label: "Outbound hook", summary: "Sends approved output to a connected system.", config_schema: { hook_id: "string", operation: "string" } },
+  { type: "notify", phase: "post", label: "Notify", summary: "Slack/Teams/email/webhook.", config_schema: { channel: "string", subject: "string" } }
+];
+
 function normalizeWorkflow(row: Record<string, unknown>): Workflow {
   const id = String(row.id ?? "");
   const fixture = fxWorkflows.find((workflow) => workflow.id === id || workflow.urn === row.urn);
@@ -720,8 +848,92 @@ function normalizeWorkflow(row: Record<string, unknown>): Workflow {
     required_hooks: asStringArray(row.required_hooks, fixture?.required_hooks),
     required_corpora: asStringArray(row.required_corpora, fixture?.required_corpora),
     default_policy_set: String(row.default_policy_set ?? fixture?.default_policy_set ?? "praetor-demo"),
-    template_origin: typeof row.template_origin === "string" ? row.template_origin : fixture?.template_origin
+    template_origin: typeof row.template_origin === "string" ? row.template_origin : fixture?.template_origin,
+    graph: resolveWorkflowGraph(row, fixture),
+    steps: Array.isArray(row.steps) ? (row.steps as Workflow["steps"]) : undefined
   };
+}
+
+function resolveWorkflowGraph(row: Record<string, unknown>, fixture?: { definition?: string; required_corpora?: string[] }): Workflow["graph"] | undefined {
+  if (row.graph && typeof row.graph === "object") return row.graph as Workflow["graph"];
+  // Fallback: parse the fixture's YAML-ish `definition` block to derive a
+  // minimal step list so the visual canvas renders identically in fixture
+  // mode. Matches the backend's compile_steps_to_graph() phase mapping.
+  const definition = typeof row.definition === "string" ? row.definition : fixture?.definition;
+  if (typeof definition !== "string") return undefined;
+  const steps = parseStepsFromYaml(definition);
+  if (!steps.length) return undefined;
+  return compileStepsToGraph(steps);
+}
+
+function parseStepsFromYaml(yaml: string): Array<{ id: string; type: string; depends_on?: string[]; with?: Record<string, unknown> }> {
+  // Tiny ad-hoc parser — only used for fixtures. Looks for `- id: foo` blocks
+  // followed by `type: bar` and optional `depends_on: [a, b]`. Robust enough
+  // for the bundled fixture shapes; not a general YAML parser.
+  const out: Array<{ id: string; type: string; depends_on?: string[] }> = [];
+  const lines = yaml.split(/\r?\n/);
+  let current: { id?: string; type?: string; depends_on?: string[] } | null = null;
+  for (const line of lines) {
+    const idMatch = line.match(/^\s*-\s*id:\s*(\S+)/);
+    if (idMatch) {
+      if (current?.id && current.type) out.push({ id: current.id, type: current.type, depends_on: current.depends_on });
+      current = { id: idMatch[1].replace(/['"]/g, "") };
+      continue;
+    }
+    if (!current) continue;
+    const typeMatch = line.match(/^\s+type:\s*(\S+)/);
+    if (typeMatch) current.type = typeMatch[1].replace(/['"]/g, "");
+    const depMatch = line.match(/^\s+depends_on:\s*\[(.*?)\]/);
+    if (depMatch) {
+      current.depends_on = depMatch[1]
+        .split(",")
+        .map((s) => s.trim().replace(/['"]/g, ""))
+        .filter(Boolean);
+    }
+  }
+  if (current?.id && current.type) out.push({ id: current.id, type: current.type, depends_on: current.depends_on });
+  return out;
+}
+
+const PRE_TYPES = new Set(["trigger.manual", "trigger.schedule", "trigger.webhook", "trigger.event", "hook.in", "corpus.query"]);
+const ASSESS_TYPES = new Set(["agent", "model.complete", "agent.run"]);
+const POST_TYPES = new Set([
+  "gate.policy", "gate.human", "sandbox.run", "finding.emit", "change.propose",
+  "evidence.generate", "audit.packet", "notify", "hook.out"
+]);
+
+function compileStepsToGraph(steps: Array<{ id: string; type: string; depends_on?: string[] }>): Workflow["graph"] {
+  let seenAssess = false;
+  const phaseColumnX: Record<"pre" | "assess" | "post", number> = { pre: 80, assess: 380, post: 680 };
+  const byPhase: Record<"pre" | "assess" | "post", string[]> = { pre: [], assess: [], post: [] };
+  const nodes = steps.map((step) => {
+    const phase: "pre" | "assess" | "post" = ASSESS_TYPES.has(step.type)
+      ? "assess"
+      : PRE_TYPES.has(step.type)
+        ? "pre"
+        : POST_TYPES.has(step.type)
+          ? "post"
+          : seenAssess ? "post" : "pre";
+    if (phase === "assess") seenAssess = true;
+    byPhase[phase].push(step.id);
+    return {
+      id: step.id,
+      type: step.type,
+      phase,
+      label: step.id,
+      config: {} as Record<string, unknown>,
+      depends_on: step.depends_on,
+      position: { x: 0, y: 0 }
+    };
+  });
+  for (const node of nodes) {
+    const indexInPhase = byPhase[node.phase].indexOf(node.id);
+    node.position = { x: phaseColumnX[node.phase], y: 80 + indexInPhase * 140 };
+  }
+  const edges = nodes.flatMap((node) =>
+    (node.depends_on ?? []).map((parent) => ({ id: `${parent}__${node.id}`, from: parent, to: node.id, kind: "control" as const }))
+  );
+  return { nodes, edges, phases: ["pre", "assess", "post"] };
 }
 
 function normalizeWorkflowRun(row: Record<string, unknown>): WorkflowRun {
@@ -838,3 +1050,24 @@ function fixtureFinding(id: string): Finding | null {
 function fixtureProposal(id: string): ProposedChange | null {
   return fxProposals.find((proposal) => proposal.id === id || proposal.urn === id) ?? null;
 }
+
+function normalizeAuditPacket(row: Record<string, unknown>): AuditPacket {
+  const scope = (row.scope && typeof row.scope === "object" && !Array.isArray(row.scope)
+    ? (row.scope as Record<string, unknown>)
+    : {}) as AuditPacket["scope"];
+  return {
+    id: String(row.id ?? ""),
+    period_start: String(row.period_start ?? new Date().toISOString()),
+    period_end: String(row.period_end ?? new Date().toISOString()),
+    scope,
+    status: (typeof row.status === "string" ? row.status : "ready") as AuditPacket["status"],
+    pdf_path: typeof row.pdf_path === "string" ? row.pdf_path : undefined,
+    json_sidecar_path: typeof row.json_sidecar_path === "string" ? row.json_sidecar_path : undefined,
+    packet_hash: typeof row.packet_hash === "string" ? row.packet_hash : undefined,
+    signature: typeof row.signature === "string" ? row.signature : undefined,
+    pubkey_fingerprint: typeof row.pubkey_fingerprint === "string" ? row.pubkey_fingerprint : undefined,
+    generated_at: typeof row.generated_at === "string" ? row.generated_at : undefined,
+    counts: row.counts && typeof row.counts === "object" ? (row.counts as AuditPacket["counts"]) : undefined
+  };
+}
+

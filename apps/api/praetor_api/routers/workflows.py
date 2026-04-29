@@ -35,12 +35,90 @@ class DrainWorkflowRequest(BaseModel):
     lease_seconds: int = Field(default=300, ge=30, le=3600)
 
 
+class WorkflowGraphPayload(BaseModel):
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WorkflowCreatePayload(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    name: str
+    id: str | None = None
+    description: str | None = None
+    trigger: str = "manual"
+    trigger_config: dict[str, Any] | None = None
+    inputs_schema: dict[str, Any] | None = None
+    outputs_schema: dict[str, Any] | None = None
+    required_hooks: list[str] = Field(default_factory=list)
+    required_corpora: list[str] = Field(default_factory=list)
+    default_policy_set: str = "praetor-demo"
+    graph: WorkflowGraphPayload
+
+
+class WorkflowPatchPayload(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    name: str | None = None
+    description: str | None = None
+    trigger: str | None = None
+    required_hooks: list[str] | None = None
+    required_corpora: list[str] | None = None
+    graph: WorkflowGraphPayload | None = None
+
+
 @router.get("/workflows")
 async def workflows() -> list[dict[str, Any]]:
     if get_settings().data_mode == "production":
         async with AsyncSessionLocal() as session:
             return await production_workflows.list_workflows(session)
     return list_workflows()
+
+
+@router.get("/workflows/nodes/catalog")
+async def workflow_node_catalog() -> list[dict[str, Any]]:
+    return production_workflows.list_node_catalog()
+
+
+@router.post("/workflows", status_code=201)
+async def create_workflow(payload: WorkflowCreatePayload) -> dict[str, Any]:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=400, detail="creating workflows requires production data mode")
+    try:
+        async with AsyncSessionLocal() as session:
+            return await production_workflows.create_custom_workflow(
+                session,
+                payload.model_dump(exclude_none=True),
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.patch("/workflows/{workflow_id}")
+async def patch_workflow(workflow_id: str, payload: WorkflowPatchPayload) -> dict[str, Any]:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=400, detail="editing workflows requires production data mode")
+    try:
+        async with AsyncSessionLocal() as session:
+            updated = await production_workflows.update_custom_workflow(
+                session, workflow_id, payload.model_dump(exclude_none=True)
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if updated is None:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return updated
+
+
+@router.delete("/workflows/{workflow_id}", status_code=204)
+async def delete_workflow(workflow_id: str) -> None:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=400, detail="deleting workflows requires production data mode")
+    async with AsyncSessionLocal() as session:
+        ok = await production_workflows.delete_custom_workflow(session, workflow_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="workflow not found or is a template")
+    return None
 
 
 @router.get("/workflows/{workflow_id}")

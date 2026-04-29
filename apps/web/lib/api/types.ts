@@ -152,6 +152,40 @@ export type StepType =
 
 export type Trigger = "manual" | "schedule" | "webhook" | "event";
 
+export type WorkflowPhase = "pre" | "assess" | "post";
+
+export interface WorkflowGraphNode {
+  id: string;
+  type: string;
+  phase: WorkflowPhase;
+  label: string;
+  config: Record<string, unknown>;
+  depends_on?: string[];
+  position: { x: number; y: number };
+}
+
+export interface WorkflowGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  kind: "data" | "control" | "approval" | "error";
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+  phases?: WorkflowPhase[];
+}
+
+export interface WorkflowStep {
+  id: string;
+  type: string;
+  phase?: WorkflowPhase;
+  label?: string;
+  with?: Record<string, unknown>;
+  depends_on?: string[];
+}
+
 export interface Workflow extends Entity {
   name: string;
   description: string;
@@ -164,6 +198,8 @@ export interface Workflow extends Entity {
   required_corpora: string[];
   default_policy_set: string;
   template_origin?: string;
+  graph?: WorkflowGraph;
+  steps?: WorkflowStep[];
 }
 
 export type WorkflowRunStatus =

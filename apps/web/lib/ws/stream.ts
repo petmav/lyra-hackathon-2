@@ -23,9 +23,11 @@ type StreamTopic =
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "");
 const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev";
 const MOCK_STREAMS = process.env.NEXT_PUBLIC_MOCK_STREAMS === "1";
+const DATA_SOURCE = (process.env.NEXT_PUBLIC_DATA_SOURCE ?? "").toLowerCase();
+const FIXTURES_ONLY = DATA_SOURCE === "fixtures";
 
 function websocketUrl(topic: StreamTopic): string | null {
-  if (!API_BASE || MOCK_STREAMS) return null;
+  if (!API_BASE || MOCK_STREAMS || FIXTURES_ONLY) return null;
   const base = API_BASE.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
   const path =
     topic.kind === "asset"

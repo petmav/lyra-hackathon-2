@@ -45,7 +45,10 @@ test.describe("Praetor platform business flows", () => {
 
   test("business flow: instantiate workflow, inspect governed agent run, and open step detail", async ({ page }, testInfo) => {
     await visitClean(page, "/workflows");
-    const templateHref = await page.locator('a[href^="/workflows/"]').first().getAttribute("href");
+    const templateHref = await page
+      .locator('a[href^="/workflows/"]:not([href="/workflows/new"]):not([href*="/edit"])')
+      .first()
+      .getAttribute("href");
     expect(templateHref).toBeTruthy();
     await visitClean(page, templateHref!);
     await expect(page.getByRole("button", { name: /instantiate run/i })).toBeVisible();

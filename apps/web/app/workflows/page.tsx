@@ -8,7 +8,7 @@ import { Button } from "@/components/primitives/Button";
 import { StatusDot } from "@/components/primitives/StatusDot";
 import { Urn } from "@/components/data/Urn";
 import { Timestamp } from "@/components/data/Timestamp";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Pencil, Plus } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +32,16 @@ export default async function WorkflowsPage() {
         number="03"
         kicker="Workflow runtime · templates"
         title={<>Run AI agents to do <span className="ed-display-italic">your</span> compliance work.</>}
-        subtitle="Each template is a typed DAG of sandboxed agentic steps with declared inputs, outputs, hooks, and policies. The agent on each step is itself a governed Asset."
+        subtitle="Each workflow is a typed DAG of sandboxed agentic steps with declared inputs, outputs, hooks, and policies. The agent on each step is itself a governed Asset."
+        aside={
+          <Link
+            href="/workflows/new"
+            className="inline-flex items-center gap-2 border border-gold px-3 py-2 text-[12px] text-gold hover:bg-gold hover:text-ink transition-colors rounded-sm"
+          >
+            <Plus size={13} strokeWidth={1.75} />
+            New workflow
+          </Link>
+        }
       />
 
       <Section number="03·1" eyebrow="Templates" title="Choose a workflow">
@@ -68,7 +77,15 @@ export default async function WorkflowsPage() {
                     </span>
                   </div>
                 </div>
-                <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2">
+                  {w.template_origin === "user-defined" && (
+                    <Link href={`/workflows/${w.id}/edit`}>
+                      <Button size="sm" variant="ghost">
+                        <Pencil size={10} strokeWidth={1.75} />
+                        edit
+                      </Button>
+                    </Link>
+                  )}
                   <Link href={`/workflows/${w.id}`}>
                     <Button size="sm" variant="primary">
                       instantiate
