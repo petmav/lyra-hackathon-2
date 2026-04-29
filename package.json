@@ -1,0 +1,21 @@
+{
+  "name": "praetor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Praetor hackathon monorepo.",
+  "scripts": {
+    "dev": "npm run demo",
+    "demo": "node scripts/run-stack.mjs demo all",
+    "prod": "node scripts/run-stack.mjs production all",
+    "demo:api": "node scripts/run-stack.mjs demo api",
+    "prod:api": "node scripts/run-stack.mjs production api",
+    "demo:web": "node scripts/run-stack.mjs demo web",
+    "prod:web": "node scripts/run-stack.mjs production web",
+    "seed:prod": "python scripts/seed_demo.py",
+    "reset:prod": "python scripts/seed_demo.py --reset",
+    "clear:prod": "python scripts/clear_prod.py",
+    "verify:audit": "python scripts/verify_audit_packet.py",
+    "test:e2e": "python scripts/e2e_platform.py",
+    "test": "powershell -ExecutionPolicy Bypass -File scripts/test.ps1"
+  }
+}
