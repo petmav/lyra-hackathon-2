@@ -77,7 +77,7 @@ async def ensure_hooks(session: AsyncSession) -> list[Hook]:
             "kind": data["kind"],
             "direction": data["direction"],
             "endpoint": data["endpoint"],
-            "auth_ref": None,
+            "auth_ref": data.get("auth_ref"),
             "scopes": data["scopes"],
             "effect_radius": data["effect_radius"],
             "enabled": data["enabled"],
@@ -92,6 +92,18 @@ async def ensure_hooks(session: AsyncSession) -> list[Hook]:
     urns = [_hook_urn(hook_id) for hook_id in HOOKS]
     result = await session.execute(select(Hook).where(Hook.urn.in_(urns)))
     by_urn = {hook.urn: hook for hook in result.scalars().all()}
+    for hook_id, data in HOOKS.items():
+        hook = by_urn.get(_hook_urn(hook_id))
+        if hook is None or hook.config:
+            continue
+        hook.name = data["name"]
+        hook.kind = data["kind"]
+        hook.direction = data["direction"]
+        hook.endpoint = data["endpoint"]
+        hook.auth_ref = data.get("auth_ref")
+        hook.scopes = data["scopes"]
+        hook.effect_radius = data["effect_radius"]
+        hook.enabled = data["enabled"]
     return [by_urn[urn] for urn in urns if urn in by_urn]
 
 
@@ -191,7 +203,7 @@ async def test_hook(session: AsyncSession, hook_id: str) -> dict[str, Any]:
             "mode": "json-stack",
             "provider": spec["provider"],
         }
-    result = await mcp_client.health(hook.endpoint)
+    result = await mcp_client.health(hook.endpoint, hook.auth_ref)
     if result.ok:
         return {
             "ok": True,
@@ -250,7 +262,7 @@ async def call_hook(
         if hook_result.error:
             errors.append(hook_result.error)
     else:
-        mcp_result = await mcp_client.call(hook.endpoint, operation, inputs, dry_run)
+        mcp_result = await mcp_client.call(hook.endpoint, operation, inputs, dry_run, hook.auth_ref)
         outputs = (
             mcp_result.outputs
             if mcp_result.ok

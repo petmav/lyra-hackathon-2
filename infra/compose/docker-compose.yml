@@ -118,6 +118,7 @@ services:
       context: ../../packages/hooks/mcp_client/stubs
     environment:
       MCP_STUB_NAME: github
+      MCP_STUB_TOKEN: ${MCP_GITHUB_TOKEN:-}
     networks:
       - default
       - praetor-mocks
@@ -127,6 +128,7 @@ services:
       context: ../../packages/hooks/mcp_client/stubs
     environment:
       MCP_STUB_NAME: slack
+      MCP_STUB_TOKEN: ${MCP_SLACK_TOKEN:-}
     networks:
       - default
       - praetor-mocks
@@ -136,6 +138,7 @@ services:
       context: ../../packages/hooks/mcp_client/stubs
     environment:
       MCP_STUB_NAME: local-files
+      MCP_STUB_TOKEN: ${MCP_LOCALFILES_TOKEN:-}
     networks:
       - default
       - praetor-mocks

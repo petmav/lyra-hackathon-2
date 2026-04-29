@@ -1,6 +1,9 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import uuid
+
+PROTOCOL_VERSION = "2025-06-18"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -58,6 +61,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _handle_mcp(self) -> None:
+        expected_token = os.environ.get("MCP_STUB_TOKEN")
+        if expected_token and self.headers.get("Authorization") != f"Bearer {expected_token}":
+            self.send_response(401)
+            self.send_header(
+                "WWW-Authenticate",
+                'Bearer resource_metadata="http://localhost/.well-known/oauth-protected-resource", scope="mcp:tools"',
+            )
+            self.end_headers()
+            return
+
         length = int(self.headers.get("content-length") or "0")
         body = self.rfile.read(length) if length else b"{}"
         try:
@@ -70,15 +83,32 @@ class Handler(BaseHTTPRequestHandler):
         stub_name = os.environ.get("MCP_STUB_NAME", "mcp-stub")
         if method == "initialize":
             result = {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": PROTOCOL_VERSION,
                 "serverInfo": {"name": stub_name, "version": "0.1.0"},
-                "capabilities": {"tools": {"listChanged": False}, "resources": {}},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"listChanged": False},
+                    "prompts": {"listChanged": False},
+                },
             }
         elif method == "tools/list":
+            if not self._require_session(request_id):
+                return
             result = {"tools": tool_catalog(stub_name)}
         elif method == "resources/list":
+            if not self._require_session(request_id):
+                return
             result = {"resources": [{"uri": "stub://northwind/support-bot", "name": "Northwind support bot"}]}
+        elif method == "prompts/list":
+            if not self._require_session(request_id):
+                return
+            result = {"prompts": [{"name": "review_change", "description": "Review a proposed change"}]}
         elif method == "tools/call":
+            if not self._require_session(request_id):
+                return
+            if self.headers.get("Mcp-Method") != "tools/call":
+                self._send_json({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "missing Mcp-Method"}})
+                return
             params = request.get("params", {})
             if not isinstance(params, dict):
                 params = {}
@@ -104,9 +134,18 @@ class Handler(BaseHTTPRequestHandler):
         payload = json.dumps(response).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        if response.get("result", {}).get("protocolVersion") == PROTOCOL_VERSION:
+            self.send_header("MCP-Session-Id", f"sess-{uuid.uuid4()}")
+            self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _require_session(self, request_id: object) -> bool:
+        if not self.headers.get("MCP-Session-Id"):
+            self._send_json({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": "missing MCP session"}})
+            return False
+        return True
 
     def log_message(self, format: str, *args: object) -> None:
         return

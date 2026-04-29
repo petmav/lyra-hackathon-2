@@ -41,6 +41,9 @@ JSON Stack hooks use `auth_ref` names in manifests and resolve them through envi
 - `secret:jira_oauth` -> `JIRA_OAUTH_TOKEN`
 - `secret:linear_token` -> `LINEAR_TOKEN`
 - `secret:microsoft_graph_oauth` -> `MICROSOFT_GRAPH_TOKEN`
+- `secret:mcp_github_token` -> `MCP_GITHUB_TOKEN`
+- `secret:mcp_localfiles_token` -> `MCP_LOCALFILES_TOKEN`
+- `secret:mcp_slack_token` -> `MCP_SLACK_TOKEN`
 - `secret:notion_token` -> `NOTION_TOKEN`
 - `secret:okta_oauth` -> `OKTA_TOKEN`
 - `secret:onetrust_oauth` -> `ONETRUST_TOKEN`
@@ -65,3 +68,13 @@ Approved proposed changes can be sent to multiple external systems through the s
 - ServiceNow record: `servicenow_grc_json/create_issue` with `SERVICENOW_TOKEN`.
 
 Live dispatch requires both a passed sandbox run and proposed-change approval. Dry-run dispatch renders the outbound request without requiring a secret.
+
+## MCP Hook Sessions
+
+Bundled MCP hooks support optional bearer authentication:
+
+- `github_stub` uses `secret:mcp_github_token` -> `MCP_GITHUB_TOKEN`.
+- `slack_stub` uses `secret:mcp_slack_token` -> `MCP_SLACK_TOKEN`.
+- `localfiles_stub` uses `secret:mcp_localfiles_token` -> `MCP_LOCALFILES_TOKEN`.
+
+When these variables are set in Compose, the stub requires `Authorization: Bearer <token>`. The API resolves the hook `auth_ref`, initializes an MCP session, and includes `MCP-Session-Id`, `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` headers on subsequent requests.

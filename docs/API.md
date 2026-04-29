@@ -78,6 +78,7 @@ Demo hook operations:
 
 In production mode, hook health and calls go through an MCP-style adapter first. The bundled stub containers expose `GET /resources` and `POST /call`; if a stub is unavailable during local tests, the API records a deterministic fallback result.
 The MCP adapter now attempts JSON-RPC-style `initialize`, `tools/list`, `resources/list`, and `tools/call` exchanges at `/mcp` before falling back to the older HTTP stub endpoints.
+MCP calls now use the Streamable HTTP session shape: initialize negotiates protocol version and server capabilities, subsequent requests include `MCP-Session-Id`, `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` where applicable, and hook `auth_ref` values are sent as bearer tokens when configured. Health checks also negotiate `tools/list`, `resources/list`, and `prompts/list`.
 
 For `kind=json_stack` hooks, production mode uses the proprietary JSON Hook Stack renderer. Dry-run previews are safe by default and redact `auth_ref` material.
 Non-dry-run JSON Stack calls resolve `auth_ref` values from environment variables and fail with `missing-secret` when the required token is absent. No secret values are returned by the API.
