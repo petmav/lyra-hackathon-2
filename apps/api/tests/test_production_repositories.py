@@ -219,6 +219,49 @@ async def test_production_hooks_and_corpus_persist() -> None:
 
     assert preview["outputs_redacted"]["provider"] == "linear"
 
+    custom_spec = {
+        "id": "internal_ticketing_test",
+        "name": "Internal Ticketing Test",
+        "provider": "internal_ticketing",
+        "version": "2026-04-test",
+        "base_url": "https://tickets.internal.example",
+        "auth": {
+            "kind": "bearer",
+            "auth_ref": "secret:internal_ticketing_test_token",
+            "scopes": ["tickets.write"],
+        },
+        "operations": {
+            "create_ticket": {
+                "direction": "out",
+                "effect_radius": "external_trusted",
+                "method": "POST",
+                "path": "/api/tickets",
+                "body_template": {"title": "{title}", "body": "{body}"},
+                "input_schema": {"title": "string", "body": "string"},
+                "output_map": {"id": "$.id"},
+            }
+        },
+    }
+
+    async with AsyncSessionLocal() as session:
+        persisted = await production_hooks.upsert_json_stack_hook(session, custom_spec)
+
+    assert persisted["ok"] is True
+    assert persisted["hook"]["id"] == "internal_ticketing_test"
+    assert persisted["hook"]["source"] == "custom"
+
+    async with AsyncSessionLocal() as session:
+        custom_call = await production_hooks.call_hook(
+            session,
+            "internal_ticketing_test",
+            "create_ticket",
+            {"title": "Praetor custom hook", "body": "Stored JSON Stack manifest"},
+            dry_run=True,
+        )
+
+    assert custom_call["status"] == "succeeded"
+    assert custom_call["outputs_redacted"]["provider"] == "internal_ticketing"
+
     async with AsyncSessionLocal() as session:
         doc = await production_corpus.ingest_document(
             session,

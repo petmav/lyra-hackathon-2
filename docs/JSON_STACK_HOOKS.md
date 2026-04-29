@@ -137,10 +137,10 @@ Current support:
 - Production hook-call integration through hooks with `kind=json_stack`.
 - Environment-backed `auth_ref` resolution for non-dry-run calls.
 - Proposed-change dispatch can route approved remediation to GitHub, Jira, Linear, Microsoft Graph email, Slack, and ServiceNow through JSON Stack hooks.
+- User-provided JSON Stack manifests persist as first-class production `hook` records through `POST /hooks/json-stack`.
 
 Next implementation steps:
 
-- Persist user-provided JSON Stack specs as first-class hook configuration records.
 - Add response mapping with JSONPath evaluation.
 - Replace the current proposed-change approval marker with first-class policy decision rows for every effect-radius approval.
 - Add UI forms for importing OpenAPI and converting selected operations into JSON Stack manifests.

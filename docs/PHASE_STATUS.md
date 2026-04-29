@@ -84,6 +84,7 @@ Legend:
 - ~~Workflow worker now calls `POST /evidence-records:consume` instead of the legacy run sweep endpoint.~~
 - ~~Remediation dispatch is now provider-neutral: approved proposed changes can route through GitHub PRs, Jira issues, Linear issues, Microsoft Graph email, Slack messages, or ServiceNow records using the JSON Stack hook layer.~~
 - ~~Effectful live hook calls now enforce an approval marker, and proposed-change dispatch requires both approval and a sandbox run before non-dry-run external writes.~~
+- ~~User-provided JSON Stack manifests now persist as first-class production `hook` records with JSONB config, validation, detail reads, previews, and hook-call execution.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -235,6 +236,7 @@ Legend:
 - ~~Initial JSON Stack catalog includes OneDrive/SharePoint, Power Platform, Salesforce, ServiceNow IRM/GRC, and OneTrust GRC templates.~~
 - ~~Expanded JSON Stack catalog includes GitHub, GitLab, Azure DevOps, Jira, Confluence, Google Drive, Slack, Teams, Notion, Linear, Okta, Datadog, Splunk HEC, Zendesk, and S3-compatible presigned URL templates.~~
 - ~~Remediation dispatch catalog includes researched endpoint mappings for GitHub PRs, Jira issues, Linear issues, Microsoft Graph email, Slack messages, and ServiceNow records.~~
+- ~~Custom JSON Stack manifests persist through `POST /hooks/json-stack` and can be called like catalog-backed hooks.~~
 - Open: add provider-specific streaming support.
 - Open: store model/provider choice on real `policy_decision` rows when policy decisions move out of deterministic fixtures.
 - ~~Environment-backed secret resolution exists for JSON Stack `auth_ref` values, with redacted readiness reporting and missing-secret failures.~~
@@ -242,8 +244,8 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Persist user-provided JSON Stack manifests as first-class hook configuration records; `auth_ref` secret resolution now exists for catalog-backed stacks.
-2. Add provider-specific response mapping/idempotency for live remediation dispatch results.
+1. Add provider-specific response mapping/idempotency for live remediation dispatch results.
+2. Add UI forms for importing OpenAPI and converting selected operations into JSON Stack manifests.
 3. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
 4. Add provider-specific model streaming support.
 5. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.

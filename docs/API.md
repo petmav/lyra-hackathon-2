@@ -37,6 +37,7 @@ Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 ## External Hooks
 
 - `GET /hooks` lists externally reliant hook connections.
+- `GET /hooks/{hook_id}` returns one hook, including a stored custom JSON Stack manifest when present.
 - `POST /hooks/{hook_id}:test` checks hook reachability.
 - `POST /hooks/{hook_id}:call` records and executes a hook operation.
 - `GET /hook-calls` lists hook calls.
@@ -44,6 +45,7 @@ Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 - `GET /hooks/json-stack/catalog/{stack_id}` returns a JSON Stack manifest.
 - `POST /hooks/json-stack:validate` validates a user-provided JSON Stack manifest.
 - `POST /hooks/json-stack:preview` renders a dry-run request for a stack operation.
+- `POST /hooks/json-stack` validates and persists a user-provided JSON Stack manifest as a first-class `hook` record in production mode.
 
 Demo hook operations:
 
@@ -78,6 +80,37 @@ The MCP adapter now attempts JSON-RPC-style `initialize`, `tools/list`, `resourc
 For `kind=json_stack` hooks, production mode uses the proprietary JSON Hook Stack renderer. Dry-run previews are safe by default and redact `auth_ref` material.
 Non-dry-run JSON Stack calls resolve `auth_ref` values from environment variables and fail with `missing-secret` when the required token is absent. No secret values are returned by the API.
 Effectful non-dry-run production calls to external hooks require an approval marker. Direct `POST /hooks/{hook_id}:call` requests can pass `effect_approved: true`; proposed-change dispatch sets that marker only after the change has passed sandbox replay and has been approved.
+
+Persist a custom internal system:
+
+```json
+{
+  "spec": {
+    "id": "internal_ticketing",
+    "name": "Internal Ticketing",
+    "provider": "internal_ticketing",
+    "version": "2026-04",
+    "base_url": "https://tickets.internal.example",
+    "auth": {
+      "kind": "bearer",
+      "auth_ref": "secret:internal_ticketing_token",
+      "scopes": ["tickets.write"]
+    },
+    "operations": {
+      "create_ticket": {
+        "direction": "out",
+        "effect_radius": "external_trusted",
+        "method": "POST",
+        "path": "/api/tickets",
+        "body_template": {"title": "{title}", "body": "{body}"},
+        "input_schema": {"title": "string", "body": "string"},
+        "output_map": {"id": "$.id"}
+      }
+    }
+  },
+  "enabled": true
+}
+```
 
 ## Workflow Runtime
 

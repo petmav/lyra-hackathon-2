@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from praetor_api.models.hook import Hook
 from praetor_api.models.hook_call import HookCall
 from praetor_api.services import mcp_client
-from praetor_api.services.json_stack import call_stack, get_stack
+from praetor_api.services.json_stack import call_stack, get_stack, validate_stack
 from praetor_api.services.hooks import HOOKS, simulate_hook_outputs
 
 HOOK_URN_PREFIX = "urn:praetor:hook:"
@@ -33,6 +34,8 @@ def _hook_id_from_urn(urn: str) -> str:
 
 
 def _hook_row_to_api(row: Hook) -> dict[str, Any]:
+    config = row.config if isinstance(row.config, dict) else {}
+    source = "custom" if config.get("json_stack") else "catalog"
     return {
         "id": _hook_id_from_urn(row.urn),
         "name": row.name,
@@ -42,6 +45,8 @@ def _hook_row_to_api(row: Hook) -> dict[str, Any]:
         "scopes": row.scopes,
         "effect_radius": row.effect_radius,
         "enabled": row.enabled,
+        "source": source,
+        "json_stack_id": (config.get("json_stack") or {}).get("id") if source == "custom" else None,
     }
 
 
@@ -90,9 +95,83 @@ async def ensure_hooks(session: AsyncSession) -> list[Hook]:
 
 
 async def list_hooks(session: AsyncSession) -> list[dict[str, Any]]:
-    hooks = await ensure_hooks(session)
+    await ensure_hooks(session)
     await session.commit()
+    result = await session.execute(select(Hook).order_by(Hook.created_at, Hook.urn))
+    hooks = list(result.scalars().all())
     return [_hook_row_to_api(hook) for hook in hooks]
+
+
+async def get_hook(session: AsyncSession, hook_id: str) -> dict[str, Any] | None:
+    hook = await _find_hook(session, hook_id)
+    if hook is None:
+        return None
+    payload = _hook_row_to_api(hook)
+    spec = _hook_json_stack_spec(hook)
+    if spec is not None:
+        payload["json_stack"] = spec
+    await session.commit()
+    return payload
+
+
+async def upsert_json_stack_hook(
+    session: AsyncSession,
+    spec: dict[str, Any],
+    *,
+    enabled: bool = True,
+    created_by: str = "api",
+) -> dict[str, Any]:
+    errors = validate_stack(spec)
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    hook_id = str(spec["id"])
+    operation_values = list(spec["operations"].values())
+    directions = {operation["direction"] for operation in operation_values}
+    if "both" in directions or {"in", "out"} <= directions:
+        direction = "both"
+    elif "out" in directions:
+        direction = "out"
+    else:
+        direction = "in"
+    effect_radius = (
+        "external_trusted"
+        if any(operation["effect_radius"] != "internal" for operation in operation_values)
+        else "internal"
+    )
+    auth = spec.get("auth", {})
+    hook = await _find_hook(session, hook_id)
+    if hook is None:
+        hook = Hook(
+            urn=_hook_urn(hook_id),
+            name=str(spec["name"]),
+            kind="json_stack",
+            direction=direction,
+            endpoint=f"json-stack://{hook_id}",
+            auth_ref=auth.get("auth_ref"),
+            scopes=list(auth.get("scopes") or []),
+            effect_radius=effect_radius,
+            enabled=enabled,
+            created_by=created_by,
+            version=1,
+            config={"json_stack": deepcopy(spec), "source": "user"},
+        )
+        session.add(hook)
+    else:
+        if hook.kind != "json_stack":
+            return {"ok": False, "errors": [f"hook {hook_id} is not a json_stack hook"]}
+        hook.name = str(spec["name"])
+        hook.direction = direction
+        hook.endpoint = f"json-stack://{hook_id}"
+        hook.auth_ref = auth.get("auth_ref")
+        hook.scopes = list(auth.get("scopes") or [])
+        hook.effect_radius = effect_radius
+        hook.enabled = enabled
+        hook.config = {"json_stack": deepcopy(spec), "source": "user"}
+        hook.version = (hook.version or 1) + 1
+    await session.commit()
+    await session.refresh(hook)
+    return {"ok": True, "hook": _hook_row_to_api(hook)}
 
 
 async def test_hook(session: AsyncSession, hook_id: str) -> dict[str, Any]:
@@ -101,7 +180,7 @@ async def test_hook(session: AsyncSession, hook_id: str) -> dict[str, Any]:
         raise KeyError(hook_id)
     await session.commit()
     if hook.kind == "json_stack":
-        spec = get_stack(hook_id)
+        spec = _hook_json_stack_spec(hook)
         if spec is None:
             return {"ok": False, "resources_count": 0, "latency_ms": 1, "mode": "json-stack-missing"}
         return {
@@ -147,7 +226,7 @@ async def call_hook(
 
     errors: list[str] = []
     if hook.kind == "json_stack":
-        spec = get_stack(hook_id)
+        spec = _hook_json_stack_spec(hook)
         if spec is None:
             raise KeyError(hook_id)
         hook_result = await call_stack(spec, operation, inputs, dry_run)
@@ -207,3 +286,11 @@ async def _find_hook(session: AsyncSession, hook_id: str) -> Hook | None:
         pass
     result = await session.execute(select(Hook).where(or_(*filters)))
     return result.scalar_one_or_none()
+
+
+def _hook_json_stack_spec(hook: Hook) -> dict[str, Any] | None:
+    config = hook.config if isinstance(hook.config, dict) else {}
+    custom = config.get("json_stack")
+    if isinstance(custom, dict):
+        return deepcopy(custom)
+    return get_stack(_hook_id_from_urn(hook.urn))

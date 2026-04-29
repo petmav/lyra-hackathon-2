@@ -69,3 +69,32 @@ def test_json_stack_catalog_includes_dispatch_destinations() -> None:
     assert {"github_json", "jira_json", "linear_json", "microsoft_mail_json", "slack_json"} <= set(stacks)
     assert any(operation["name"] == "create_issue" for operation in stacks["linear_json"]["operations"])
     assert any(operation["name"] == "send_mail" for operation in stacks["microsoft_mail_json"]["operations"])
+
+
+def test_json_stack_persist_validates_manifest_shape() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/hooks/json-stack",
+        headers=HEADERS,
+        json={
+            "spec": {
+                "id": "demo_custom_hook",
+                "name": "Demo Custom Hook",
+                "provider": "internal",
+                "version": "2026-04",
+                "base_url": "https://internal.example",
+                "auth": {"kind": "none", "auth_ref": None, "scopes": []},
+                "operations": {
+                    "ping": {
+                        "direction": "in",
+                        "effect_radius": "internal",
+                        "method": "GET",
+                        "path": "/ping",
+                    }
+                },
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
