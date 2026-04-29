@@ -14,6 +14,14 @@ from praetor_api.services.json_stack import call_stack, get_stack
 from praetor_api.services.hooks import HOOKS, simulate_hook_outputs
 
 HOOK_URN_PREFIX = "urn:praetor:hook:"
+EFFECTFUL_RADII = {"external_trusted", "external_public", "privileged"}
+
+
+class EffectGatedError(PermissionError):
+    def __init__(self, hook_id: str, effect_radius: str):
+        super().__init__(f"{hook_id} requires approval before {effect_radius} dispatch")
+        self.hook_id = hook_id
+        self.effect_radius = effect_radius
 
 
 def _hook_urn(hook_id: str) -> str:
@@ -125,10 +133,17 @@ async def call_hook(
     operation: str,
     inputs: dict[str, Any],
     dry_run: bool = True,
+    *,
+    effect_approved: bool = False,
+    workflow_run_id: UUID | None = None,
+    step_run_id: UUID | None = None,
+    policy_decision_id: UUID | None = None,
 ) -> dict[str, Any]:
     hook = await _find_hook(session, hook_id)
     if hook is None:
         raise KeyError(hook_id)
+    if hook.effect_radius in EFFECTFUL_RADII and not dry_run and not effect_approved:
+        raise EffectGatedError(hook_id, hook.effect_radius)
 
     errors: list[str] = []
     if hook.kind == "json_stack":
@@ -155,15 +170,19 @@ async def call_hook(
     call = HookCall(
         hook_id=hook.id,
         direction=hook.direction,
+        workflow_run_id=workflow_run_id,
+        step_run_id=step_run_id,
         inputs_redacted={
             "operation": operation,
             "dry_run": dry_run,
+            "effect_approved": effect_approved,
             "payload": inputs,
         },
         outputs_redacted=outputs,
         status=status,
         latency_ms=latency_ms,
         errors=errors,
+        policy_decision_id=policy_decision_id,
     )
     session.add(call)
     await session.commit()

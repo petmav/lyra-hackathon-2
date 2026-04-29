@@ -135,11 +135,12 @@ Current support:
 - Request rendering from typed inputs.
 - Dry-run preview through dedicated JSON Stack endpoints.
 - Production hook-call integration through hooks with `kind=json_stack`.
+- Environment-backed `auth_ref` resolution for non-dry-run calls.
+- Proposed-change dispatch can route approved remediation to GitHub, Jira, Linear, Microsoft Graph email, Slack, and ServiceNow through JSON Stack hooks.
 
 Next implementation steps:
 
 - Persist user-provided JSON Stack specs as first-class hook configuration records.
-- Add live secret resolution behind `auth_ref`.
 - Add response mapping with JSONPath evaluation.
-- Add effect-radius enforcement tied to policy and human approval records.
+- Replace the current proposed-change approval marker with first-class policy decision rows for every effect-radius approval.
 - Add UI forms for importing OpenAPI and converting selected operations into JSON Stack manifests.

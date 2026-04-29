@@ -14,6 +14,7 @@ class HookCallRequest(BaseModel):
     operation: str
     inputs: dict = Field(default_factory=dict)
     dry_run: bool = True
+    effect_approved: bool = False
 
 
 class JsonStackValidateRequest(BaseModel):
@@ -102,7 +103,17 @@ async def call(hook_id: str, request: HookCallRequest) -> dict:
                     request.operation,
                     request.inputs,
                     request.dry_run,
+                    effect_approved=request.effect_approved,
                 )
         return call_hook(hook_id, request.operation, request.inputs, request.dry_run)
     except KeyError:
         raise HTTPException(status_code=404, detail="hook not found") from None
+    except production_hooks.EffectGatedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "effect-gated",
+                "hook_id": exc.hook_id,
+                "effect_radius": exc.effect_radius,
+            },
+        ) from None

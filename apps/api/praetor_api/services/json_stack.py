@@ -58,6 +58,41 @@ JSON_STACK_CATALOG: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "microsoft_mail_json": {
+        "id": "microsoft_mail_json",
+        "name": "Microsoft Graph Mail JSON stack",
+        "provider": "microsoft_graph_mail",
+        "version": "2026-04",
+        "base_url": "https://graph.microsoft.com/v1.0",
+        "auth": {
+            "kind": "oauth2",
+            "auth_ref": "secret:microsoft_graph_oauth",
+            "scopes": ["Mail.Send"],
+        },
+        "operations": {
+            "send_mail": {
+                "direction": "out",
+                "effect_radius": "external_trusted",
+                "method": "POST",
+                "path": "/me/sendMail",
+                "body_template": {
+                    "message": {
+                        "subject": "{subject}",
+                        "body": {"contentType": "HTML", "content": "{body_html}"},
+                        "toRecipients": "{to_recipients}",
+                    },
+                    "saveToSentItems": "{save_to_sent_items}",
+                },
+                "input_schema": {
+                    "subject": "string",
+                    "body_html": "string",
+                    "to_recipients": "array",
+                    "save_to_sent_items": "boolean",
+                },
+                "output_map": {"status": "$.status"},
+            }
+        },
+    },
     "power_platform_json": {
         "id": "power_platform_json",
         "name": "Power Platform custom connector JSON stack",
@@ -418,6 +453,22 @@ JSON_STACK_CATALOG: dict[str, dict[str, Any]] = {
         "base_url": "https://api.linear.app",
         "auth": {"kind": "bearer", "auth_ref": "secret:linear_token", "scopes": ["issues:read", "issues:write"]},
         "operations": {
+            "create_issue": {
+                "direction": "out",
+                "effect_radius": "external_trusted",
+                "method": "POST",
+                "path": "/graphql",
+                "body_template": {
+                    "query": "mutation IssueCreate($input: IssueCreateInput!) {{ issueCreate(input: $input) {{ success issue {{ id identifier title url }} }} }}",
+                    "variables": {"input": "{issue}"},
+                },
+                "input_schema": {"issue": "object"},
+                "output_map": {
+                    "success": "$.data.issueCreate.success",
+                    "id": "$.data.issueCreate.issue.id",
+                    "url": "$.data.issueCreate.issue.url",
+                },
+            },
             "graphql": {
                 "direction": "both",
                 "effect_radius": "external_trusted",

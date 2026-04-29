@@ -58,3 +58,14 @@ def test_hook_call_records_external_operation() -> None:
 
     assert response.status_code == 200
     assert response.json()["outputs_redacted"]["pr_url"].endswith("/pull/42")
+
+
+def test_json_stack_catalog_includes_dispatch_destinations() -> None:
+    client = TestClient(app)
+    response = client.get("/hooks/json-stack/catalog", headers=HEADERS)
+
+    assert response.status_code == 200
+    stacks = {stack["id"]: stack for stack in response.json()}
+    assert {"github_json", "jira_json", "linear_json", "microsoft_mail_json", "slack_json"} <= set(stacks)
+    assert any(operation["name"] == "create_issue" for operation in stacks["linear_json"]["operations"])
+    assert any(operation["name"] == "send_mail" for operation in stacks["microsoft_mail_json"]["operations"])

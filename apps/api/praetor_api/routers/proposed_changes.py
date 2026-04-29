@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from praetor_api.db import AsyncSessionLocal
 from praetor_api.services.demo_state import (
@@ -11,6 +12,13 @@ from praetor_api.services import production_reviews
 from praetor_api.settings import get_settings
 
 router = APIRouter(tags=["proposed-changes"])
+
+
+class ApplyChangeRequest(BaseModel):
+    hook_id: str | None = None
+    operation: str | None = None
+    inputs: dict = Field(default_factory=dict)
+    dry_run: bool = True
 
 
 @router.get("/proposed-changes")
@@ -74,12 +82,22 @@ async def approve(change_id: str) -> dict:
 
 @router.post("/proposed-changes/{change_id}:apply")
 @router.post("/proposed-changes/{change_id}/apply")
-async def apply(change_id: str) -> dict:
+async def apply(change_id: str, request: ApplyChangeRequest | None = None) -> dict:
+    request = request or ApplyChangeRequest()
     if get_settings().data_mode == "production":
         async with AsyncSessionLocal() as session:
-            result = await production_reviews.apply_change(session, change_id)
+            result = await production_reviews.apply_change(
+                session,
+                change_id,
+                hook_id=request.hook_id,
+                operation=request.operation,
+                inputs=request.inputs,
+                dry_run=request.dry_run,
+            )
         if result is None:
             raise HTTPException(status_code=404, detail="proposed change not found")
+        if result.get("ok") is False:
+            raise HTTPException(status_code=409, detail=result)
         return result
 
     ensure_demo_state()

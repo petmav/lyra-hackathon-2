@@ -90,6 +90,27 @@ async def test_production_workflow_events_and_review_lifecycle() -> None:
     assert sandbox is not None
     assert sandbox["exit_code"] == 0
 
+    async with AsyncSessionLocal() as session:
+        approved = await production_reviews.approve_change(session, change_id)
+
+    assert approved is True
+
+    async with AsyncSessionLocal() as session:
+        applied = await production_reviews.apply_change(
+            session,
+            change_id,
+            hook_id="jira_json",
+            operation="create_issue",
+            inputs={"site": "northwind"},
+            dry_run=True,
+        )
+
+    assert applied is not None
+    assert applied["ok"] is True
+    assert applied["status"] == "dispatch_previewed"
+    assert applied["hook_id"] == "jira_json"
+    assert applied["dispatch"]["outputs_redacted"]["provider"] == "jira"
+
 
 @pytest.mark.asyncio
 async def test_queued_workflow_drain_executes_persisted_run() -> None:
@@ -176,6 +197,27 @@ async def test_production_hooks_and_corpus_persist() -> None:
         )
 
     assert call["status"] == "succeeded"
+
+    async with AsyncSessionLocal() as session:
+        with pytest.raises(production_hooks.EffectGatedError):
+            await production_hooks.call_hook(
+                session,
+                "github_json",
+                "create_pull_request",
+                {"owner": "northwind", "repo": "support-bot"},
+                dry_run=False,
+            )
+
+    async with AsyncSessionLocal() as session:
+        preview = await production_hooks.call_hook(
+            session,
+            "linear_json",
+            "create_issue",
+            {"issue": {"teamId": "team", "title": "Praetor test"}},
+            dry_run=True,
+        )
+
+    assert preview["outputs_redacted"]["provider"] == "linear"
 
     async with AsyncSessionLocal() as session:
         doc = await production_corpus.ingest_document(

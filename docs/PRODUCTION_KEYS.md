@@ -52,3 +52,16 @@ JSON Stack hooks use `auth_ref` names in manifests and resolve them through envi
 - `secret:zendesk_token` -> `ZENDESK_TOKEN`
 
 Non-dry-run calls return `status=failed` and `error=missing-secret` when the matching env var is not present. Secret values are never included in readiness or hook-call responses.
+
+## Remediation Dispatch Destinations
+
+Approved proposed changes can be sent to multiple external systems through the same guarded hook layer:
+
+- GitHub pull request: `github_json/create_pull_request` with `GITHUB_TOKEN`.
+- Jira issue: `jira_json/create_issue` with `JIRA_OAUTH_TOKEN`.
+- Linear issue: `linear_json/create_issue` with `LINEAR_TOKEN`.
+- Microsoft Graph email: `microsoft_mail_json/send_mail` with `MICROSOFT_GRAPH_TOKEN`.
+- Slack message: `slack_json/post_message` with `SLACK_BOT_TOKEN`.
+- ServiceNow record: `servicenow_grc_json/create_issue` with `SERVICENOW_TOKEN`.
+
+Live dispatch requires both a passed sandbox run and proposed-change approval. Dry-run dispatch renders the outbound request without requiring a secret.

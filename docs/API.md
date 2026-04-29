@@ -63,8 +63,9 @@ Demo hook operations:
 - `google_drive_json` with `list_files`
 - `slack_json` with `post_message`
 - `teams_json` with `send_channel_message`
+- `microsoft_mail_json` with `send_mail`
 - `notion_json` with `create_page`
-- `linear_json` with `graphql`
+- `linear_json` with `create_issue` or `graphql`
 - `okta_json` with `list_users`
 - `datadog_json` with `query_events`
 - `splunk_hec_json` with `send_event`
@@ -76,6 +77,7 @@ The MCP adapter now attempts JSON-RPC-style `initialize`, `tools/list`, `resourc
 
 For `kind=json_stack` hooks, production mode uses the proprietary JSON Hook Stack renderer. Dry-run previews are safe by default and redact `auth_ref` material.
 Non-dry-run JSON Stack calls resolve `auth_ref` values from environment variables and fail with `missing-secret` when the required token is absent. No secret values are returned by the API.
+Effectful non-dry-run production calls to external hooks require an approval marker. Direct `POST /hooks/{hook_id}:call` requests can pass `effect_approved: true`; proposed-change dispatch sets that marker only after the change has passed sandbox replay and has been approved.
 
 ## Workflow Runtime
 
@@ -96,7 +98,7 @@ Workflow runs accept `model_provider` and `model` at request time.
 Set `PRAETOR_WORKFLOW_EXECUTION_MODE=sync` to execute a run inside the API request, or
 `PRAETOR_WORKFLOW_EXECUTION_MODE=queued` to persist runs as `queued` and let the workflow worker
 drain them through `POST /workflow-runs:drain`. The Compose `workflow` service runs this drain loop
-and periodically calls `POST /evidence-records:sweep` to materialize evidence in the background.
+and periodically calls `POST /evidence-records:consume` to materialize evidence in the background.
 
 Workflow definition responses include the full frontend contract: `trigger_config`, `inputs_schema`,
 `outputs_schema`, `required_hooks`, `required_corpora`, `default_policy_set`, and optional
@@ -140,6 +142,7 @@ Production runs that pause at `gate.human` can be resumed through `POST /workflo
 - `POST /proposed-changes/{id}:apply`
 - `GET /evidence-records`
 - `POST /evidence-records:sweep`
+- `POST /evidence-records:consume`
 - `GET /sandbox-runs`
 - `GET /sandbox-runs/{id}`
 - `GET /sandbox-runs/{id}/logs`
@@ -148,6 +151,21 @@ Production runs that pause at `gate.human` can be resumed through `POST /workflo
 Production sandbox runs call the `apps/sandbox` orchestrator when `SANDBOX_ORCHESTRATOR_URL` is configured. The orchestrator exposes `GET /health` and `POST /launch`, attempts Docker execution, and returns deterministic replay output when Docker is unavailable.
 Sandbox launch manifests include a hardened default isolation profile: no network except the configured mock network, read-only root filesystem, `/tmp` tmpfs, memory limit, PID limit, dropped Linux capabilities, and `no-new-privileges`.
 Sandbox logs stream as newline-delimited JSON from `GET /sandbox-runs/{id}/logs`.
+
+Approved proposed changes can be dispatched to any supported outbound hook, not only source control. `POST /proposed-changes/{id}:apply` accepts:
+
+```json
+{
+  "hook_id": "jira_json",
+  "operation": "create_issue",
+  "dry_run": true,
+  "inputs": {
+    "site": "northwind"
+  }
+}
+```
+
+Built-in dispatch options include GitHub pull requests, Jira issues, Linear issues, Microsoft Graph email, Slack messages, and ServiceNow records. `dry_run` defaults to `true` and returns `status: dispatch_previewed` without marking the change applied; set it to `false` only after configuring the destination secret.
 
 ## Runtime Mode
 

@@ -24,7 +24,7 @@ from praetor_api.models.policy_decision import PolicyDecision
 from praetor_api.models.proposed_change import ProposedChange
 from praetor_api.models.sandbox_run import SandboxRun
 from praetor_api.models.workflow_run import WorkflowRun
-from praetor_api.services.production_hooks import ensure_hooks
+from praetor_api.services.production_hooks import EffectGatedError, call_hook, ensure_hooks
 from praetor_api.services import production_inventory
 from praetor_api.services.production_workflows import ASSET_EXTERNAL_ID, ASSET_URN
 from praetor_api.settings import get_settings
@@ -43,6 +43,52 @@ EVIDENCE_URN_PREFIX = "urn:praetor:evidence_record:"
 AUDIT_PACKET_URN_PREFIX = "urn:praetor:audit_packet:"
 HOOK_URN_PREFIX = "urn:praetor:hook:"
 ARTIFACT_ROOT = Path("artifacts/audit_packets")
+DEFAULT_DISPATCH_HOOK = "github_json"
+
+DISPATCH_OPTIONS: list[dict[str, Any]] = [
+    {
+        "hook_id": "github_json",
+        "operation": "create_pull_request",
+        "label": "GitHub pull request",
+        "effect_radius": "external_trusted",
+        "endpoint": "POST https://api.github.com/repos/{owner}/{repo}/pulls",
+    },
+    {
+        "hook_id": "jira_json",
+        "operation": "create_issue",
+        "label": "Jira issue",
+        "effect_radius": "external_trusted",
+        "endpoint": "POST https://{site}.atlassian.net/rest/api/3/issue",
+    },
+    {
+        "hook_id": "linear_json",
+        "operation": "create_issue",
+        "label": "Linear issue",
+        "effect_radius": "external_trusted",
+        "endpoint": "POST https://api.linear.app/graphql",
+    },
+    {
+        "hook_id": "microsoft_mail_json",
+        "operation": "send_mail",
+        "label": "Microsoft Graph email",
+        "effect_radius": "external_trusted",
+        "endpoint": "POST https://graph.microsoft.com/v1.0/me/sendMail",
+    },
+    {
+        "hook_id": "slack_json",
+        "operation": "post_message",
+        "label": "Slack message",
+        "effect_radius": "external_trusted",
+        "endpoint": "POST https://slack.com/api/chat.postMessage",
+    },
+    {
+        "hook_id": "servicenow_grc_json",
+        "operation": "create_issue",
+        "label": "ServiceNow record",
+        "effect_radius": "external_trusted",
+        "endpoint": "POST https://{instance}.service-now.com/api/now/table/{table_name}",
+    },
+]
 
 
 def _now() -> datetime:
@@ -111,7 +157,7 @@ async def _create_proposal_for_finding(
     session: AsyncSession,
     finding: Finding,
 ) -> ProposedChange:
-    hook = await _ensure_hook(session, "github_stub")
+    hook = await _ensure_hook(session, DEFAULT_DISPATCH_HOOK)
     proposal_id = f"chg_{uuid4().hex[:12]}"
     obligations = finding.obligations_cited
     proposal = ProposedChange(
@@ -318,16 +364,69 @@ async def approve_change(session: AsyncSession, change_id: str) -> bool:
     return True
 
 
-async def apply_change(session: AsyncSession, change_id: str) -> dict[str, Any] | None:
+async def apply_change(
+    session: AsyncSession,
+    change_id: str,
+    *,
+    hook_id: str | None = None,
+    operation: str | None = None,
+    inputs: dict[str, Any] | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any] | None:
     if get_settings().seed_demo_data:
         await ensure_review_state(session)
     proposal = await _find_proposal(session, change_id)
     if proposal is None:
         return None
-    proposal.status = "applied"
-    proposal.applied_at = _now()
-    await session.commit()
-    return {"ok": True, "pr_url": "https://github.example/northwind/support-bot/pull/42"}
+    if proposal.status != "approved":
+        return {
+            "ok": False,
+            "error": "approval-required",
+            "status": proposal.status,
+            "message": "Approve the proposed change before dispatching it to an external system.",
+        }
+    if proposal.sandbox_run_id is None:
+        return {
+            "ok": False,
+            "error": "sandbox-required",
+            "status": proposal.status,
+            "message": "Run and pass the sandbox replay before external dispatch.",
+        }
+
+    selected_hook_id = hook_id or await _hook_external_id(session, proposal.apply_via_hook_id) or DEFAULT_DISPATCH_HOOK
+    selected_operation = operation or _default_operation(selected_hook_id)
+    payload = _dispatch_inputs(proposal, selected_hook_id, selected_operation, inputs or {})
+    try:
+        dispatch = await call_hook(
+            session,
+            selected_hook_id,
+            selected_operation,
+            payload,
+            dry_run,
+            effect_approved=True,
+        )
+    except EffectGatedError as exc:
+        return {
+            "ok": False,
+            "error": "effect-gated",
+            "hook_id": exc.hook_id,
+            "effect_radius": exc.effect_radius,
+        }
+    if dispatch["status"] != "succeeded":
+        return {"ok": False, "status": "dispatch_failed", "dispatch": dispatch}
+
+    if not dry_run:
+        proposal.status = "applied"
+        proposal.applied_at = _now()
+        await session.commit()
+    return {
+        "ok": True,
+        "status": "dispatch_previewed" if dry_run else "applied",
+        "hook_id": selected_hook_id,
+        "operation": selected_operation,
+        "dry_run": dry_run,
+        "dispatch": dispatch,
+    }
 
 
 async def list_evidence_records(session: AsyncSession) -> list[dict[str, Any]]:
@@ -546,6 +645,124 @@ async def _ensure_hook(session: AsyncSession, hook_id: str) -> Hook | None:
     return result.scalar_one_or_none()
 
 
+async def _hook_external_id(session: AsyncSession, hook_uuid: UUID | None) -> str | None:
+    if hook_uuid is None:
+        return None
+    hook = await session.get(Hook, hook_uuid)
+    if hook is None:
+        return None
+    return hook.urn.removeprefix(HOOK_URN_PREFIX)
+
+
+def _default_operation(hook_id: str) -> str:
+    if hook_id == "github_stub":
+        return "open_pr"
+    for option in DISPATCH_OPTIONS:
+        if option["hook_id"] == hook_id:
+            return str(option["operation"])
+    return "create_pull_request"
+
+
+def _dispatch_inputs(
+    proposal: ProposedChange,
+    hook_id: str,
+    operation: str,
+    overrides: dict[str, Any],
+) -> dict[str, Any]:
+    if overrides:
+        return _deep_merge(_default_dispatch_inputs(proposal, hook_id, operation), overrides)
+    return _default_dispatch_inputs(proposal, hook_id, operation)
+
+
+def _default_dispatch_inputs(proposal: ProposedChange, hook_id: str, operation: str) -> dict[str, Any]:
+    title = f"Praetor proposed change {proposal.urn.removeprefix(PROPOSED_CHANGE_URN_PREFIX)}"
+    summary = _proposal_summary(proposal)
+    if hook_id == "github_json" and operation == "create_pull_request":
+        return {
+            "owner": "northwind",
+            "repo": "support-bot",
+            "title": title,
+            "head": "praetor/send-email-domain-guard",
+            "base": "main",
+            "body": summary,
+        }
+    if hook_id == "jira_json" and operation == "create_issue":
+        return {
+            "site": "example",
+            "issue": {
+                "fields": {
+                    "project": {"key": "PRAE"},
+                    "summary": title,
+                    "description": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{"type": "text", "text": summary}],
+                            }
+                        ],
+                    },
+                    "issuetype": {"name": "Task"},
+                    "labels": ["praetor", "ai-governance"],
+                }
+            },
+        }
+    if hook_id == "linear_json" and operation == "create_issue":
+        return {
+            "issue": {
+                "teamId": "replace-with-linear-team-id",
+                "title": title,
+                "description": summary,
+            }
+        }
+    if hook_id == "microsoft_mail_json" and operation == "send_mail":
+        return {
+            "subject": title,
+            "body_html": summary.replace("\n", "<br />"),
+            "to_recipients": [
+                {"emailAddress": {"address": "compliance@example.com"}},
+            ],
+            "save_to_sent_items": True,
+        }
+    if hook_id == "slack_json" and operation == "post_message":
+        return {"channel": "#ai-governance", "text": summary}
+    if hook_id == "servicenow_grc_json" and operation == "create_issue":
+        return {
+            "instance": "example",
+            "table_name": "incident",
+            "record": {
+                "short_description": title,
+                "description": summary,
+                "category": "software",
+                "subcategory": "ai-governance",
+            },
+        }
+    return {"title": title, "body": summary, "proposal_id": proposal.urn.removeprefix(PROPOSED_CHANGE_URN_PREFIX)}
+
+
+def _proposal_summary(proposal: ProposedChange) -> str:
+    obligations = ", ".join(proposal.obligations_addressed or []) or "none recorded"
+    return (
+        f"Praetor approved proposed change: {proposal.urn}\n\n"
+        f"Kind: {proposal.kind}\n"
+        f"Status: {proposal.status}\n"
+        f"Obligations addressed: {obligations}\n"
+        f"Residual risk: {proposal.residual_risk_estimate or 'not recorded'}\n\n"
+        f"Diff:\n{proposal.diff}"
+    )
+
+
+def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 async def _find_finding(session: AsyncSession, finding_id: str) -> Finding | None:
     filters = [Finding.urn == f"{FINDING_URN_PREFIX}{finding_id}"]
     try:
@@ -619,7 +836,8 @@ def _proposal_to_api(row: ProposedChange) -> dict[str, Any]:
         "status": row.status,
         "approver": row.approver,
         "applied_at": row.applied_at.isoformat() if row.applied_at else None,
-        "apply_via_hook_id": "github_stub",
+        "apply_via_hook_id": DEFAULT_DISPATCH_HOOK,
+        "dispatch_options": DISPATCH_OPTIONS,
     }
 
 
