@@ -75,6 +75,37 @@ class FakeAsyncClient:
         return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "error": {"code": -32601}})
 
 
+class FakeOAuthClient:
+    calls: list[dict] = []
+
+    def __init__(self, timeout: int):
+        self.timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get(self, url: str):
+        self.calls.append({"method": "GET", "url": url})
+        if url.endswith("/.well-known/oauth-protected-resource"):
+            return FakeResponse({"authorization_servers": ["https://auth.example"]})
+        if url == "https://auth.example/.well-known/oauth-authorization-server":
+            return FakeResponse({"registration_endpoint": "https://auth.example/register"})
+        raise AssertionError(url)
+
+    async def post(self, url: str, headers: dict | None = None, json: dict | None = None):
+        self.calls.append({"method": "POST", "url": url, "json": json})
+        if url.endswith("/mcp"):
+            return FakeResponse({"jsonrpc": "2.0", "id": (json or {})["id"], "error": {"code": 401}})
+        if url == "https://auth.example/register":
+            assert json["token_endpoint_auth_method"] == "none"
+            assert "http://localhost:8000/oauth/mcp/callback" in json["redirect_uris"]
+            return FakeResponse({"client_id": "praetor-client", "client_secret": "secret-value"})
+        raise AssertionError(url)
+
+
 @pytest.mark.asyncio
 async def test_mcp_health_negotiates_session_and_lists_capabilities(monkeypatch) -> None:
     FakeAsyncClient.calls = []
@@ -102,3 +133,17 @@ async def test_mcp_call_sends_session_and_method_name_headers(monkeypatch) -> No
     assert result.ok is True
     assert result.outputs["url"] == "https://example.test/pr/1"
     assert result.outputs["_mcp"]["session_id"] == "sess...test"
+
+
+@pytest.mark.asyncio
+async def test_mcp_health_discovers_and_registers_oauth_client(monkeypatch) -> None:
+    FakeOAuthClient.calls = []
+    monkeypatch.setattr(mcp_client.httpx, "AsyncClient", FakeOAuthClient)
+
+    result = await mcp_client.health("https://mcp.example/mcp")
+
+    assert result.ok is True
+    assert result.outputs["mode"] == "mcp-oauth-registration"
+    assert result.outputs["oauth"]["client"]["client_id"] == "praetor-client"
+    assert result.outputs["oauth"]["client"]["client_secret"] == "[redacted]"
+    assert any(call["url"] == "https://auth.example/register" for call in FakeOAuthClient.calls)

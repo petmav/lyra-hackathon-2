@@ -8,6 +8,7 @@ Relevant standard behavior:
 - HTTP clients must include `MCP-Protocol-Version` after initialization.
 - Streamable HTTP requests carry mirrored routing headers such as `Mcp-Method` and, for named requests, `Mcp-Name`.
 - MCP authorization treats protected MCP servers as OAuth 2.1 resource servers. Clients discover authorization metadata through OAuth Protected Resource Metadata and use access tokens for protected requests.
+- MCP clients should discover Protected Resource Metadata, then Authorization Server Metadata or OIDC discovery, and may use OAuth Dynamic Client Registration when `registration_endpoint` is advertised.
 - Capability negotiation happens through `initialize`, and richer discovery is exposed through calls such as `tools/list`, `resources/list`, and `prompts/list`.
 
 Praetor implementation:
@@ -20,7 +21,7 @@ Praetor implementation:
 
 Still open:
 
-- Dynamic OAuth client registration and full authorization metadata discovery for remote third-party MCP servers.
+- Persisting dynamically registered OAuth clients and completing the browser/user authorization-code flow after registration.
 - Long-lived SSE/stream resumption and server-to-client notifications.
 - Persisted MCP session cache across API process restarts.
 

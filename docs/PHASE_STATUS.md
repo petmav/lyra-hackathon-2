@@ -95,6 +95,7 @@ Legend:
 - ~~Secret resolution now supports HashiCorp Vault KV v2 through `PRAETOR_SECRET_BACKEND=vault|env_then_vault|vault_then_env`, and model provider keys can resolve from `secret:openai_api_key`, `secret:anthropic_api_key`, and `secret:google_api_key`.~~
 - ~~Evidence worker v2 now consumes production workflow events through a Redis Streams consumer group and ACKs stream entries only after evidence rows commit, with persisted event-table fallback when Redis is unavailable.~~
 - ~~JSON Stack OpenAPI import now accepts JSON or YAML through `POST /hooks/json-stack:import-openapi`, maps selected operations, infers input/output maps, and preserves supported OpenAPI security scheme metadata.~~
+- ~~Remote MCP OAuth discovery and dynamic client registration exists: the MCP client reads protected-resource metadata, authorization-server metadata, and RFC 7591 `registration_endpoint` responses, with client secrets redacted from health output.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -184,7 +185,8 @@ Legend:
 - ~~Partial: Task 3.3 MCP client adapter boundary exists for hook health/calls, and MCP stubs now expose `/call`.~~
 - ~~Partial: Task 3.3 JSON-RPC MCP session handshake and tool/resource listing/call path exists for stubs.~~
 - ~~Partial: Task 3.3 external write effect-radius enforcement exists for hook calls and proposed-change dispatch.~~
-- Open: Task 3.3 authenticated MCP sessions and richer production tool/resource negotiation beyond stubs.
+- ~~Task 3.3 remote MCP OAuth discovery and dynamic client registration exists for servers that advertise RFC 7591 registration endpoints.~~
+- Open: Task 3.3 persist registered MCP OAuth clients and complete authorization-code token exchange.
 - ~~Partial: sandbox runs persist Docker-oriented manifests, orchestrator mode, logs, replay results, and lifecycle state in Postgres.~~
 - ~~Partial: Task 3.4 `apps/sandbox` now exposes a launch service that runs containers through the mounted Docker socket and falls back to deterministic replay.~~
 - ~~Partial: Task 3.4 workflow agent steps invoke the sandbox launch service/replay path before model/finding output is persisted.~~
@@ -260,10 +262,10 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
-2. Add provider streaming to the frontend/runtime views where live partial output is useful.
-3. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
-4. Add first-class policy decision persistence for workflow gates.
+1. Add provider streaming to the frontend/runtime views where live partial output is useful.
+2. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
+3. Add first-class policy decision persistence for workflow gates.
+4. Persist registered MCP OAuth clients and complete authorization-code token exchange.
 5. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
 
 ## Update Rules For Future Work
