@@ -185,6 +185,7 @@ Production mode registers the bundled deterministic workflow templates:
 
 Workflow runs now publish hash-chained events. In `demo` mode the stream is backed by an in-memory event log. In `production` mode the stream service writes to Redis Streams.
 Production runs that pause at `gate.human` can be resumed through `POST /workflow-runs/{id}:resume`; cancelled runs are marked through `POST /workflow-runs/{id}:cancel`.
+Production `gate.policy` steps also persist first-class `policy_decision` rows linked to the asset, workflow run, and step run. Evidence generation can reference those decisions through `decision_ids`.
 
 ## Inventory, Obligations, Controls
 

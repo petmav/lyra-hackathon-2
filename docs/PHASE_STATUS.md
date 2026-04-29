@@ -98,6 +98,7 @@ Legend:
 - ~~Remote MCP OAuth discovery and dynamic client registration exists: the MCP client reads protected-resource metadata, authorization-server metadata, and RFC 7591 `registration_endpoint` responses, with client secrets redacted from health output.~~
 - ~~Frontend runtime can consume provider SSE through `api.models.stream(...)`, and `/hooks/validate` includes a dry-run provider stream probe for OpenAI, Anthropic, and Google selections.~~
 - ~~JWT auth mode now supports OIDC/JWKS verification: `PRAETOR_JWT_JWKS_URI` or `PRAETOR_OIDC_DISCOVERY_URL` enables RS256 validation against issuer keys before issuer/audience/RBAC checks.~~
+- ~~Production `gate.policy` workflow steps persist first-class `policy_decision` rows linked to asset, workflow run, and step run, including outcome, input hash, rationale, latency, and model/provider context in the rationale.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -214,7 +215,7 @@ Legend:
 - ~~Partial: evidence worker loop periodically materializes records from workflow events through the production sweep endpoint.~~
 - ~~Partial: evidence assembly now uses event-consumer checkpoints and attaches policy decisions plus obligation mappings where available.~~
 - ~~Redis Streams consumer group path exists for evidence worker v2.~~
-- Open: first-class policy decision persistence for workflow gates.
+- ~~First-class policy decision persistence exists for production workflow `gate.policy` steps.~~
 - ~~Ed25519 signing for generated audit packets.~~
 - ~~PDF artifact output exists for generated audit packets.~~
 - ~~JSON sidecar output.~~
@@ -265,11 +266,11 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add first-class policy decision persistence for workflow gates.
-2. Persist registered MCP OAuth clients and complete authorization-code token exchange.
-3. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
-4. Add live model-stream traces inside workflow step drawers when provider calls run in `live` mode.
-5. Add JWKS refresh-on-unknown-kid and configurable accepted algorithms beyond RS256.
+1. Persist registered MCP OAuth clients and complete authorization-code token exchange.
+2. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
+3. Add live model-stream traces inside workflow step drawers when provider calls run in `live` mode.
+4. Add JWKS refresh-on-unknown-kid and configurable accepted algorithms beyond RS256.
+5. Add policy decision API/listing UI for auditors.
 
 ## Update Rules For Future Work
 

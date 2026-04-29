@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from praetor_api.models.asset import Asset
 from praetor_api.models.finding import Finding
+from praetor_api.models.policy_decision import PolicyDecision
 from praetor_api.models.proposed_change import ProposedChange
 from praetor_api.models.sandbox_run import SandboxRun
 from praetor_api.models.step_run import StepRun
@@ -501,6 +503,17 @@ async def process_workflow_run(
                 findings.extend(item for item in emitted if isinstance(item, dict))
             if step["type"] == "change.propose" and isinstance(proposed, list):
                 proposals.extend(item for item in proposed if isinstance(item, dict))
+            if step["type"] == "gate.policy":
+                await _persist_policy_decision(
+                    session,
+                    workflow_run,
+                    asset,
+                    row,
+                    step,
+                    step_outputs,
+                    model_provider=model_provider,
+                    model=model,
+                )
             if step_status != "succeeded":
                 final_status = step_status
 
@@ -635,6 +648,56 @@ async def _persist_findings_and_proposals(
             *list(finding_row.proposed_change_ids or []),
             proposal_id,
         ]
+
+
+async def _persist_policy_decision(
+    session: AsyncSession,
+    workflow_run: WorkflowRun,
+    asset: Asset,
+    step_run: StepRun,
+    step: dict[str, Any],
+    outputs: dict[str, Any],
+    *,
+    model_provider: str,
+    model: str,
+) -> None:
+    existing = await session.scalar(
+        select(PolicyDecision.id).where(PolicyDecision.step_run_id == step_run.id).limit(1)
+    )
+    if existing is not None:
+        return
+    decision_input = {
+        "workflow_run_id": str(workflow_run.id),
+        "step_id": step_run.step_id,
+        "step": step,
+        "outputs": outputs,
+        "model_provider": model_provider,
+        "model": model,
+    }
+    outcome = str(outputs.get("decision") or "unknown")
+    severity = str(outputs.get("severity") or "unknown")
+    workflow_outputs = workflow_run.outputs or {}
+    policy_set = str(outputs.get("policy_set") or workflow_outputs.get("default_policy_set") or "praetor-demo")
+    session.add(
+        PolicyDecision(
+            engine="praetor.workflow",
+            input_hash=_stable_hash(decision_input),
+            outcome=outcome,
+            rationale=(
+                f"Workflow policy gate evaluated as {outcome}; "
+                f"severity={severity}; policy_set={policy_set}; "
+                f"model_provider={model_provider}; model={model}."
+            ),
+            latency_ms=float(outputs.get("latency_ms") or 1.0),
+            asset_id=asset.id,
+            workflow_run_id=workflow_run.id,
+            step_run_id=step_run.id,
+        )
+    )
+
+
+def _stable_hash(value: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 async def resume_workflow_run(

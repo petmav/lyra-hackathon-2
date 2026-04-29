@@ -8,6 +8,7 @@ if os.getenv("PRAETOR_RUN_DB_TESTS") != "1":
 
 from praetor_api.db import AsyncSessionLocal
 from praetor_api.models.asset import Asset
+from praetor_api.models.policy_decision import PolicyDecision
 from praetor_api.models.sandbox_run import SandboxRun
 from praetor_api.models.step_run import StepRun
 from praetor_api.services import production_corpus, production_hooks, production_inventory, production_reviews
@@ -78,6 +79,23 @@ async def test_production_workflow_events_and_review_lifecycle() -> None:
     assert policy_run["workflow_id"] == "policy_gap_analysis"
     assert policy_run["status"] == "succeeded"
     assert policy_run["step_runs"][-1]["step_id"] == "summarize"
+
+    async with AsyncSessionLocal() as session:
+        gate_run = await production_workflows.run_workflow(
+            session,
+            "ai_system_intake",
+            {},
+            model_provider="openai",
+            model="gpt-5.4-mini",
+        )
+        decision = await session.scalar(
+            select(PolicyDecision).where(PolicyDecision.workflow_run_id.is_not(None)).limit(1)
+        )
+
+    assert gate_run["status"] == "succeeded"
+    assert decision is not None
+    assert decision.outcome == "allow"
+    assert "model_provider=openai" in decision.rationale
 
     async with AsyncSessionLocal() as session:
         findings = await production_reviews.list_findings(session)
