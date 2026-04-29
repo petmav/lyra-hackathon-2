@@ -1,0 +1,161 @@
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path not in {"/health", "/resources"}:
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        body = {
+            "ok": True,
+            "stub": os.environ.get("MCP_STUB_NAME", "mcp-stub"),
+            "resources": ["stub://northwind/support-bot"],
+        }
+        payload = json.dumps(body).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_POST(self) -> None:
+        if self.path == "/mcp":
+            self._handle_mcp()
+            return
+        if self.path != "/call":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        length = int(self.headers.get("content-length") or "0")
+        body = self.rfile.read(length) if length else b"{}"
+        try:
+            request = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError:
+            request = {}
+
+        stub_name = os.environ.get("MCP_STUB_NAME", "mcp-stub")
+        operation = request.get("operation", "unknown")
+        inputs = request.get("inputs", {})
+        if not isinstance(inputs, dict):
+            inputs = {}
+
+        response = {
+            "ok": True,
+            "stub": stub_name,
+            "operation": operation,
+            "outputs": output_for(stub_name, operation, inputs, bool(request.get("dry_run", True))),
+        }
+        payload = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _handle_mcp(self) -> None:
+        length = int(self.headers.get("content-length") or "0")
+        body = self.rfile.read(length) if length else b"{}"
+        try:
+            request = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError:
+            request = {}
+
+        method = request.get("method")
+        request_id = request.get("id")
+        stub_name = os.environ.get("MCP_STUB_NAME", "mcp-stub")
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {"name": stub_name, "version": "0.1.0"},
+                "capabilities": {"tools": {"listChanged": False}, "resources": {}},
+            }
+        elif method == "tools/list":
+            result = {"tools": tool_catalog(stub_name)}
+        elif method == "resources/list":
+            result = {"resources": [{"uri": "stub://northwind/support-bot", "name": "Northwind support bot"}]}
+        elif method == "tools/call":
+            params = request.get("params", {})
+            if not isinstance(params, dict):
+                params = {}
+            name = params.get("name", "unknown")
+            arguments = params.get("arguments", {})
+            if not isinstance(arguments, dict):
+                arguments = {}
+            result = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(output_for(stub_name, str(name), arguments, bool(arguments.get("dry_run", True)))),
+                    }
+                ],
+                "isError": False,
+            }
+        else:
+            self._send_json({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "method not found"}})
+            return
+        self._send_json({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    def _send_json(self, response: dict) -> None:
+        payload = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+def output_for(stub_name: str, operation: str, inputs: dict, dry_run: bool) -> dict:
+    if stub_name == "github" and operation == "open_pr":
+        return {
+            "pr_url": "https://github.example/northwind/support-bot/pull/42",
+            "branch": inputs.get("branch", "praetor/send-email-domain-guard"),
+            "dry_run": dry_run,
+        }
+    if stub_name == "github" and operation == "read_repo":
+        return {
+            "repo_url": inputs.get("repo_url", "stub://support-bot"),
+            "files": ["agent.py", "tools.py"],
+        }
+    if stub_name == "slack" and operation == "request_approval":
+        return {
+            "approval_url": "https://slack.example/archives/C-demo/p-approval",
+            "status": "requested",
+        }
+    if stub_name == "local-files" and operation == "read":
+        return {
+            "path": inputs.get("path", "/sandbox/work"),
+            "content": "",
+        }
+    return {"status": "accepted", "dry_run": dry_run}
+
+
+def tool_catalog(stub_name: str) -> list[dict]:
+    if stub_name == "github":
+        names = ["read_repo", "open_pr"]
+    elif stub_name == "slack":
+        names = ["request_approval"]
+    elif stub_name == "local-files":
+        names = ["read"]
+    else:
+        names = ["call"]
+    return [
+        {
+            "name": name,
+            "description": f"{stub_name} stub tool {name}",
+            "inputSchema": {"type": "object", "additionalProperties": True},
+        }
+        for name in names
+    ]
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8800"))
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
