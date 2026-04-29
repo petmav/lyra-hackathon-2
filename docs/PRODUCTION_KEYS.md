@@ -28,6 +28,17 @@ curl -X POST http://localhost:8000/models:check \
   -d '{"provider":"openai","model":"gpt-5.4-mini","live":true}'
 ```
 
+Stream a provider response with the same key material:
+
+```bash
+curl -N -X POST http://localhost:8000/models:stream \
+  -H "Authorization: Bearer dev" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"google","model":"gemini-2.0-flash","prompt":"Return one readiness sentence.","dry_run":false}'
+```
+
+Praetor normalizes OpenAI Responses API, Anthropic Messages API, and Gemini `streamGenerateContent` chunks into the same SSE event contract, so UI/runtime code does not branch on provider-specific wire formats.
+
 ## JSON Stack Integration Secrets
 
 JSON Stack hooks use `auth_ref` names in manifests and resolve them through environment variables at call time. Dry-run previews never require a token.

@@ -1,6 +1,11 @@
 from fastapi.testclient import TestClient
 
 from praetor_api.main import app
+from praetor_api.services.model_providers import (
+    _anthropic_stream_event,
+    _google_stream_event,
+    _openai_stream_event,
+)
 from praetor_api.services.json_stack import apply_output_map
 
 HEADERS = {"Authorization": "Bearer dev"}
@@ -44,6 +49,70 @@ def test_model_readiness_and_offline_check() -> None:
     assert check.status_code == 200
     assert check.json()["provider"] == "openai"
     assert check.json()["live_checked"] is False
+
+
+def test_model_stream_returns_normalized_sse_events() -> None:
+    client = TestClient(app)
+
+    with client.stream(
+        "POST",
+        "/models:stream",
+        headers=HEADERS,
+        json={
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+            "prompt": "Stream a control result",
+            "dry_run": True,
+        },
+    ) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: start" in body
+    assert "event: delta" in body
+    assert "event: done" in body
+    assert '"provider":"openai"' in body
+
+
+def test_provider_stream_event_mappers_normalize_deltas() -> None:
+    openai = _openai_stream_event(
+        "response.output_text.delta",
+        {"type": "response.output_text.delta", "delta": "ok"},
+        "gpt-5.4-mini",
+    )
+    anthropic = _anthropic_stream_event(
+        "content_block_delta",
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}},
+        "claude-sonnet-4-20250514",
+    )
+    google = _google_stream_event(
+        "message",
+        {"candidates": [{"content": {"parts": [{"text": "ok"}]}, "index": 0}]},
+        "gemini-2.0-flash",
+    )
+
+    assert openai == {
+        "type": "delta",
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "text": "ok",
+        "raw_type": "response.output_text.delta",
+    }
+    assert anthropic == {
+        "type": "delta",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-20250514",
+        "text": "ok",
+        "raw_type": "content_block_delta",
+    }
+    assert google == {
+        "type": "delta",
+        "provider": "google",
+        "model": "gemini-2.0-flash",
+        "text": "ok",
+        "raw_type": "message",
+    }
 
 
 def test_hook_call_records_external_operation() -> None:

@@ -90,6 +90,7 @@ Legend:
 - ~~Hooks UI now imports OpenAPI JSON, lets users select operations, converts them to JSON Stack manifests, validates them, and persists them as production hooks.~~
 - ~~MCP client now performs session-aware Streamable HTTP negotiation with bearer auth refs, protocol/session headers, tool/resource/prompt discovery, and tool-call name routing.~~
 - ~~Bundled MCP stubs now support optional bearer auth, session IDs, protocol version headers, prompts/list, and stricter MCP request headers.~~
+- ~~Provider-specific model streaming exists through `POST /models:stream`, normalizing OpenAI Responses API, Anthropic Messages API, and Gemini `streamGenerateContent` SSE formats into `start`/`delta`/`usage`/`done`/`error` events.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -244,18 +245,18 @@ Legend:
 - ~~Custom JSON Stack manifests persist through `POST /hooks/json-stack` and can be called like catalog-backed hooks.~~
 - ~~OpenAPI-to-JSON-Stack importer exists on `/hooks/validate` for internal REST systems and vendor APIs.~~
 - ~~MCP hook auth refs can be backed by `MCP_GITHUB_TOKEN`, `MCP_SLACK_TOKEN`, and `MCP_LOCALFILES_TOKEN`; Compose stubs enforce them when set.~~
-- Open: add provider-specific streaming support.
+- ~~Provider-specific streaming endpoint: `POST /models:stream`.~~
 - Open: store model/provider choice on real `policy_decision` rows when policy decisions move out of deterministic fixtures.
 - ~~Environment-backed secret resolution exists for JSON Stack `auth_ref` values, with redacted readiness reporting and missing-secret failures.~~
 - Open: replace environment-backed secret resolution with a production secret manager or vault.
 
 ## Next Implementation Queue
 
-1. Add provider-specific model streaming support.
-2. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.
-3. Convert the checkpointed evidence consumer from persisted `agent_event` polling to Redis Streams consumer groups.
-4. Add YAML parsing and richer OpenAPI security scheme import.
-5. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
+1. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.
+2. Convert the checkpointed evidence consumer from persisted `agent_event` polling to Redis Streams consumer groups.
+3. Add YAML parsing and richer OpenAPI security scheme import.
+4. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
+5. Add provider streaming to the frontend/runtime views where live partial output is useful.
 
 ## Update Rules For Future Work
 

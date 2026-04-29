@@ -8,6 +8,7 @@ All endpoints require `Authorization: Bearer dev` in local demo mode.
 - `GET /models/readiness` reports model provider key readiness without making a network call.
 - `POST /models:check` validates one selected provider/model; set `live: true` to make a small upstream call.
 - `POST /models:complete` runs a provider-neutral completion request.
+- `POST /models:stream` runs the same provider-neutral request and returns normalized Server-Sent Events.
 
 Example:
 
@@ -27,6 +28,23 @@ Supported provider adapters:
 - `google` via `GOOGLE_API_KEY`
 
 `dry_run` defaults to `true`; set it to `false` only when the matching API key is configured.
+
+Streaming responses use `text/event-stream` and normalize provider-native streaming into:
+
+- `start` with selected provider/model metadata.
+- `delta` with incremental text.
+- `usage` when a provider emits incremental token usage.
+- `done` with final text and usage metadata when available.
+- `error` with a redacted provider/API error.
+
+Example:
+
+```bash
+curl -N -X POST http://localhost:8000/models:stream \
+  -H "Authorization: Bearer dev" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"anthropic","model":"claude-sonnet-4-20250514","prompt":"Summarize SOC 2 CC7.2","dry_run":true}'
+```
 
 Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 

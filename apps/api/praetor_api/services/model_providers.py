@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import json
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 import httpx
@@ -155,6 +157,69 @@ async def complete(
     raise KeyError(selected_provider.id)
 
 
+async def stream_complete(
+    prompt: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    system: str | None = None,
+    dry_run: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    selected_provider, selected_model = normalize_choice(provider, model)
+    yield {"type": "start", "provider": selected_provider.id, "model": selected_model}
+
+    if dry_run:
+        text = f"[dry-run:{selected_provider.id}/{selected_model}] {prompt[:160]}"
+        for chunk in _chunk_text(text, 32):
+            yield {"type": "delta", "provider": selected_provider.id, "model": selected_model, "text": chunk}
+        yield {
+            "type": "done",
+            "provider": selected_provider.id,
+            "model": selected_model,
+            "text": text,
+            "usage": {"input_tokens": len(prompt.split()), "output_tokens": max(1, len(text.split()))},
+        }
+        return
+
+    if not provider_configured(selected_provider.id):
+        raise ModelProviderError(
+            selected_provider.id,
+            selected_model,
+            f"{selected_provider.env_key} is not configured",
+            status_code=400,
+        )
+
+    try:
+        if selected_provider.id == "openai":
+            async for event in _openai_stream_complete(prompt, selected_model, system):
+                yield event
+            return
+        if selected_provider.id == "anthropic":
+            async for event in _anthropic_stream_complete(prompt, selected_model, system):
+                yield event
+            return
+        if selected_provider.id == "google":
+            async for event in _google_stream_complete(prompt, selected_model, system):
+                yield event
+            return
+    except httpx.HTTPStatusError as exc:
+        detail = _truncate_error_detail(exc.response.text)
+        raise ModelProviderError(
+            selected_provider.id,
+            selected_model,
+            f"{selected_provider.name} API returned HTTP {exc.response.status_code}: {detail}",
+            status_code=502,
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise ModelProviderError(
+            selected_provider.id,
+            selected_model,
+            f"{selected_provider.name} API request failed: {exc.__class__.__name__}",
+            status_code=502,
+        ) from exc
+    raise KeyError(selected_provider.id)
+
+
 async def _openai_complete(prompt: str, model: str, system: str | None) -> dict[str, Any]:
     api_key = get_settings().openai_api_key
     if not api_key:
@@ -177,6 +242,37 @@ async def _openai_complete(prompt: str, model: str, system: str | None) -> dict[
         "usage": data.get("usage", {}),
         "raw": data,
     }
+
+
+async def _openai_stream_complete(prompt: str, model: str, system: str | None) -> AsyncIterator[dict[str, Any]]:
+    api_key = get_settings().openai_api_key
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    payload: dict[str, Any] = {"model": model, "input": prompt, "stream": True}
+    if system:
+        payload["instructions"] = system
+    text_parts: list[str] = []
+    yielded_done = False
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for event_name, data in _aiter_sse_events(response):
+                event = _openai_stream_event(event_name, data, model)
+                if event is None:
+                    continue
+                if event["type"] == "delta":
+                    text_parts.append(event["text"])
+                elif event["type"] == "done":
+                    event["text"] = "".join(text_parts)
+                    yielded_done = True
+                yield event
+    if not yielded_done:
+        yield {"type": "done", "provider": "openai", "model": model, "text": "".join(text_parts), "usage": {}}
 
 
 async def _anthropic_complete(prompt: str, model: str, system: str | None) -> dict[str, Any]:
@@ -208,6 +304,52 @@ async def _anthropic_complete(prompt: str, model: str, system: str | None) -> di
     }
 
 
+async def _anthropic_stream_complete(prompt: str, model: str, system: str | None) -> AsyncIterator[dict[str, Any]]:
+    api_key = get_settings().anthropic_api_key
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": 1024,
+        "stream": True,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system:
+        payload["system"] = system
+    text_parts: list[str] = []
+    latest_usage: dict[str, Any] = {}
+    yielded_done = False
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for event_name, data in _aiter_sse_events(response):
+                event = _anthropic_stream_event(event_name, data, model)
+                if event is None:
+                    continue
+                if event["type"] == "delta":
+                    text_parts.append(event["text"])
+                elif event["type"] == "usage":
+                    latest_usage = event.get("usage", {})
+                elif event["type"] == "done":
+                    event["text"] = "".join(text_parts)
+                    event["usage"] = latest_usage
+                    yielded_done = True
+                yield event
+    if not yielded_done:
+        yield {
+            "type": "done",
+            "provider": "anthropic",
+            "model": model,
+            "text": "".join(text_parts),
+            "usage": latest_usage,
+        }
+
+
 async def _google_complete(prompt: str, model: str, system: str | None) -> dict[str, Any]:
     api_key = get_settings().google_api_key
     if not api_key:
@@ -232,6 +374,45 @@ async def _google_complete(prompt: str, model: str, system: str | None) -> dict[
         "usage": data.get("usageMetadata", {}),
         "raw": data,
     }
+
+
+async def _google_stream_complete(prompt: str, model: str, system: str | None) -> AsyncIterator[dict[str, Any]]:
+    api_key = get_settings().google_api_key
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY is not configured")
+    payload: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    if system:
+        payload["systemInstruction"] = {"parts": [{"text": system}]}
+    text_parts: list[str] = []
+    latest_usage: dict[str, Any] = {}
+    yielded_done = False
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent",
+            params={"key": api_key, "alt": "sse"},
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for event_name, data in _aiter_sse_events(response):
+                event = _google_stream_event(event_name, data, model)
+                if event is None:
+                    continue
+                if event["type"] == "delta":
+                    text_parts.append(event["text"])
+                elif event["type"] == "done":
+                    event["text"] = "".join(text_parts)
+                    yielded_done = True
+                latest_usage = event.get("usage", latest_usage)
+                yield event
+    if not yielded_done:
+        yield {
+            "type": "done",
+            "provider": "google",
+            "model": model,
+            "text": "".join(text_parts),
+            "usage": latest_usage,
+        }
 
 
 async def check_provider(
@@ -285,6 +466,120 @@ def _extract_openai_text(data: dict[str, Any]) -> str:
             if content.get("type") == "output_text" and isinstance(content.get("text"), str):
                 text_parts.append(content["text"])
     return "".join(text_parts)
+
+
+def _openai_stream_event(event_name: str | None, data: dict[str, Any], model: str) -> dict[str, Any] | None:
+    event_type = data.get("type") or event_name
+    if event_type == "response.output_text.delta" and isinstance(data.get("delta"), str):
+        return {"type": "delta", "provider": "openai", "model": model, "text": data["delta"], "raw_type": event_type}
+    if event_type == "response.completed":
+        response = data.get("response") if isinstance(data.get("response"), dict) else {}
+        return {
+            "type": "done",
+            "provider": "openai",
+            "model": model,
+            "usage": response.get("usage", {}),
+            "raw_type": event_type,
+        }
+    if event_type == "error":
+        return {"type": "error", "provider": "openai", "model": model, "error": data.get("error", data)}
+    return None
+
+
+def _anthropic_stream_event(event_name: str | None, data: dict[str, Any], model: str) -> dict[str, Any] | None:
+    event_type = data.get("type") or event_name
+    if event_type == "content_block_delta":
+        delta = data.get("delta") if isinstance(data.get("delta"), dict) else {}
+        if delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+            return {
+                "type": "delta",
+                "provider": "anthropic",
+                "model": model,
+                "text": delta["text"],
+                "raw_type": event_type,
+            }
+    if event_type == "message_delta":
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        return {"type": "usage", "provider": "anthropic", "model": model, "usage": usage, "raw_type": event_type}
+    if event_type == "message_stop":
+        return {"type": "done", "provider": "anthropic", "model": model, "usage": {}, "raw_type": event_type}
+    if event_type == "error":
+        return {"type": "error", "provider": "anthropic", "model": model, "error": data.get("error", data)}
+    return None
+
+
+def _google_stream_event(event_name: str | None, data: dict[str, Any], model: str) -> dict[str, Any] | None:
+    candidates = data.get("candidates", [])
+    text_parts: list[str] = []
+    finish_reason: str | None = None
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            finish_reason = candidate.get("finishReason") or finish_reason
+            content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+            parts = content.get("parts", []) if isinstance(content, dict) else []
+            if isinstance(parts, list):
+                text_parts.extend(part.get("text", "") for part in parts if isinstance(part, dict))
+    if text_parts:
+        return {
+            "type": "delta",
+            "provider": "google",
+            "model": model,
+            "text": "".join(text_parts),
+            "raw_type": event_name or "message",
+        }
+    if finish_reason:
+        return {
+            "type": "done",
+            "provider": "google",
+            "model": model,
+            "usage": data.get("usageMetadata", {}),
+            "raw_type": event_name or "message",
+        }
+    return None
+
+
+async def _aiter_sse_events(response: httpx.Response) -> AsyncIterator[tuple[str | None, dict[str, Any]]]:
+    event_name: str | None = None
+    data_lines: list[str] = []
+    async for line in response.aiter_lines():
+        if line == "":
+            parsed = _parse_sse_event(event_name, data_lines)
+            if parsed is not None:
+                yield parsed
+            event_name = None
+            data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            event_name = line.removeprefix("event:").strip()
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line.removeprefix("data:").strip())
+    parsed = _parse_sse_event(event_name, data_lines)
+    if parsed is not None:
+        yield parsed
+
+
+def _parse_sse_event(event_name: str | None, data_lines: list[str]) -> tuple[str | None, dict[str, Any]] | None:
+    if not data_lines:
+        return None
+    raw = "\n".join(data_lines)
+    if raw == "[DONE]":
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return event_name, {"type": event_name or "message", "text": raw}
+    if not isinstance(data, dict):
+        return event_name, {"type": event_name or "message", "data": data}
+    return event_name, data
+
+
+def _chunk_text(text: str, size: int) -> list[str]:
+    return [text[index : index + size] for index in range(0, len(text), size)] or [""]
 
 
 def _truncate_error_detail(detail: str) -> str:
