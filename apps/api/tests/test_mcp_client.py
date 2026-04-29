@@ -34,7 +34,7 @@ class FakeAsyncClient:
         self.calls.append({"url": url, "headers": headers, "json": payload})
         if method == "initialize":
             assert headers["Mcp-Method"] == "initialize"
-            assert headers["Authorization"] == "Bearer test-token"
+            assert headers["Authorization"] in {"Bearer test-token", "Bearer oauth-token"}
             return FakeResponse(
                 {
                     "jsonrpc": "2.0",
@@ -133,6 +133,25 @@ async def test_mcp_call_sends_session_and_method_name_headers(monkeypatch) -> No
     assert result.ok is True
     assert result.outputs["url"] == "https://example.test/pr/1"
     assert result.outputs["_mcp"]["session_id"] == "sess...test"
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_prefers_oauth_token_over_auth_ref(monkeypatch) -> None:
+    FakeAsyncClient.calls = []
+    monkeypatch.setenv("MCP_TEST_TOKEN", "static-token")
+    monkeypatch.setattr(mcp_client.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = await mcp_client.call(
+        "http://mcp.example",
+        "open_pr",
+        {"branch": "praetor"},
+        True,
+        "secret:mcp_test_token",
+        oauth_token="oauth-token",
+    )
+
+    assert result.ok is True
+    assert FakeAsyncClient.calls[0]["headers"]["Authorization"] == "Bearer oauth-token"
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from praetor_api.db import AsyncSessionLocal
 from praetor_api.services.hooks import CALLS, HOOKS, call_hook, test_hook
 from praetor_api.services import production_hooks
 from praetor_api.services.json_stack import call_stack, catalog_summary, get_stack, validate_stack
+from praetor_api.services import mcp_oauth
 from praetor_api.services.openapi_importer import OpenApiImportError, import_openapi_to_json_stack
 from praetor_api.settings import get_settings
 
@@ -16,6 +17,17 @@ class HookCallRequest(BaseModel):
     inputs: dict = Field(default_factory=dict)
     dry_run: bool = True
     effect_approved: bool = False
+
+
+class McpOAuthStartRequest(BaseModel):
+    hook_id: str
+    redirect_uri: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+
+
+class McpOAuthCallbackRequest(BaseModel):
+    state: str
+    code: str
 
 
 class JsonStackValidateRequest(BaseModel):
@@ -45,6 +57,61 @@ class JsonStackOpenApiImportRequest(BaseModel):
 @router.get("/hooks/json-stack/catalog")
 async def json_stack_catalog() -> list[dict]:
     return catalog_summary()
+
+
+@router.get("/mcp/oauth/connections")
+async def mcp_oauth_connections() -> list[dict]:
+    if get_settings().data_mode != "production":
+        return []
+    async with AsyncSessionLocal() as session:
+        return await mcp_oauth.list_connections(session)
+
+
+@router.post("/mcp/oauth:start")
+@router.post("/mcp/oauth/start")
+async def mcp_oauth_start(request: McpOAuthStartRequest) -> dict:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=409, detail="MCP OAuth connections require production data mode")
+    try:
+        async with AsyncSessionLocal() as session:
+            return await mcp_oauth.start_authorization(
+                session,
+                hook_id=request.hook_id,
+                redirect_uri=request.redirect_uri,
+                scopes=request.scopes or None,
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"hook not found: {exc.args[0]}") from None
+    except mcp_oauth.McpOAuthError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/mcp/oauth:callback")
+@router.post("/mcp/oauth/callback")
+async def mcp_oauth_callback(request: McpOAuthCallbackRequest) -> dict:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=409, detail="MCP OAuth connections require production data mode")
+    try:
+        async with AsyncSessionLocal() as session:
+            return await mcp_oauth.complete_authorization(session, state=request.state, code=request.code)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"oauth state not found: {exc.args[0]}") from None
+    except mcp_oauth.McpOAuthError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/mcp/oauth/{connection_id}:refresh")
+@router.post("/mcp/oauth/{connection_id}/refresh")
+async def mcp_oauth_refresh(connection_id: str) -> dict:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=409, detail="MCP OAuth connections require production data mode")
+    try:
+        async with AsyncSessionLocal() as session:
+            return await mcp_oauth.refresh_connection(session, connection_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"oauth connection not found: {exc.args[0]}") from None
+    except mcp_oauth.McpOAuthError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @router.get("/hooks/json-stack/catalog/{stack_id}")

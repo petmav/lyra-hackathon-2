@@ -34,6 +34,7 @@ class OAuthClientRegistration:
 class McpSession:
     endpoint: str
     auth_ref: str | None = None
+    oauth_token: str | None = None
     session_id: str | None = None
     protocol_version: str = MCP_PROTOCOL_VERSION
     server_info: dict[str, Any] | None = None
@@ -49,15 +50,15 @@ class McpSession:
             headers["Mcp-Name"] = name
         if self.session_id:
             headers[MCP_SESSION_HEADER] = self.session_id
-        token = resolve_secret(self.auth_ref)
+        token = self.oauth_token or resolve_secret(self.auth_ref)
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
 
-async def health(endpoint: str, auth_ref: str | None = None) -> McpCallResult:
+async def health(endpoint: str, auth_ref: str | None = None, oauth_token: str | None = None) -> McpCallResult:
     started = perf_counter()
-    session = McpSession(endpoint=endpoint, auth_ref=auth_ref)
+    session = McpSession(endpoint=endpoint, auth_ref=auth_ref, oauth_token=oauth_token)
     mcp = await _mcp_request(session, "initialize", _initialize_params())
     if mcp.get("ok"):
         tools = await _mcp_request(session, "tools/list", {})
@@ -120,9 +121,10 @@ async def call(
     inputs: dict[str, Any],
     dry_run: bool,
     auth_ref: str | None = None,
+    oauth_token: str | None = None,
 ) -> McpCallResult:
     started = perf_counter()
-    session = McpSession(endpoint=endpoint, auth_ref=auth_ref)
+    session = McpSession(endpoint=endpoint, auth_ref=auth_ref, oauth_token=oauth_token)
     initialized = await _mcp_request(session, "initialize", _initialize_params())
     if not initialized.get("ok"):
         return await _legacy_call(endpoint, operation, inputs, dry_run, started)

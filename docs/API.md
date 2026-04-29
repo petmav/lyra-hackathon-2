@@ -68,6 +68,10 @@ Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 - `POST /hooks/json-stack:import-openapi` accepts OpenAPI JSON or YAML and converts selected operations into a JSON Stack manifest, including supported security scheme metadata.
 - `POST /hooks/json-stack:preview` renders a dry-run request for a stack operation.
 - `POST /hooks/json-stack` validates and persists a user-provided JSON Stack manifest as a first-class `hook` record in production mode.
+- `GET /mcp/oauth/connections` lists persisted MCP OAuth connection state with token material redacted.
+- `POST /mcp/oauth:start` discovers/registers a remote MCP OAuth client and returns an authorization URL.
+- `POST /mcp/oauth:callback` exchanges an authorization code for tokens and stores them on the MCP OAuth connection.
+- `POST /mcp/oauth/{connection_id}:refresh` refreshes an authorized MCP OAuth token set when a refresh token is present.
 
 The frontend `/hooks/validate` page includes an OpenAPI JSON/YAML importer that extracts selected operations, infers JSON Stack direction/effect metadata, builds input schemas and output maps, imports OpenAPI `securitySchemes`, and saves the generated manifest through `POST /hooks/json-stack`.
 
@@ -102,6 +106,7 @@ In production mode, hook health and calls go through an MCP-style adapter first.
 The MCP adapter now attempts JSON-RPC-style `initialize`, `tools/list`, `resources/list`, and `tools/call` exchanges at `/mcp` before falling back to the older HTTP stub endpoints.
 MCP calls now use the Streamable HTTP session shape: initialize negotiates protocol version and server capabilities, subsequent requests include `MCP-Session-Id`, `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` where applicable, and hook `auth_ref` values are sent as bearer tokens when configured. Health checks also negotiate `tools/list`, `resources/list`, and `prompts/list`.
 When a remote MCP server requires OAuth and advertises protected-resource metadata, the MCP client can discover authorization-server metadata and perform RFC 7591 dynamic client registration when a `registration_endpoint` is available. Registered client secrets are redacted in health output.
+Production MCP OAuth connections are persisted in `mcp_oauth_connection`. Once authorized, MCP hook calls prefer the stored OAuth access token over static hook bearer refs and refresh it when possible.
 
 For `kind=json_stack` hooks, production mode uses the proprietary JSON Hook Stack renderer. Dry-run previews are safe by default and redact `auth_ref` material.
 Non-dry-run JSON Stack calls resolve `auth_ref` values from environment variables and fail with `missing-secret` when the required token is absent. No secret values are returned by the API.

@@ -124,3 +124,23 @@ Bundled MCP hooks support optional bearer authentication:
 - `localfiles_stub` uses `secret:mcp_localfiles_token` -> `MCP_LOCALFILES_TOKEN`.
 
 When these variables are set in Compose, the stub requires `Authorization: Bearer <token>`. The API resolves the hook `auth_ref`, initializes an MCP session, and includes `MCP-Session-Id`, `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` headers on subsequent requests.
+
+Remote OAuth-protected MCP servers can be connected without preconfigured bearer tokens:
+
+```bash
+curl -X POST http://localhost:8000/mcp/oauth:start \
+  -H "Authorization: Bearer dev" \
+  -H "Content-Type: application/json" \
+  -d '{"hook_id":"remote_mcp_hook","redirect_uri":"http://localhost:8000/oauth/mcp/callback"}'
+```
+
+Open the returned `authorization_url`, then exchange the returned code:
+
+```bash
+curl -X POST http://localhost:8000/mcp/oauth:callback \
+  -H "Authorization: Bearer dev" \
+  -H "Content-Type: application/json" \
+  -d '{"state":"<state>","code":"<authorization-code>"}'
+```
+
+Authorized MCP hook calls prefer the persisted OAuth access token and refresh it through `POST /mcp/oauth/{connection_id}:refresh` when a refresh token is present.

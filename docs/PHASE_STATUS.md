@@ -19,7 +19,7 @@ Legend:
 - ~~Root npm scripts exist for `npm run demo`, `npm run prod`, `npm run demo:api`, `npm run prod:api`, `npm run demo:web`, `npm run prod:web`.~~
 - ~~Web build validates with `NEXT_DIST_DIR=.next-verify npm run build`.~~
 - ~~Root `npm test` now runs API tests, workflow tests, web typecheck, and web production build through a cross-platform Node runner.~~
-- ~~Latest root verification: `npm test` passes with API `41 passed, 1 skipped`, workflow `6 passed`, sandbox `1 passed`, web typecheck passed, and web production build passed.~~
+- ~~Latest root verification: `npm test` passes with API `42 passed, 1 skipped`, workflow `6 passed`, sandbox `1 passed`, web typecheck passed, and web production build passed.~~
 - ~~Default web build validates with `cd apps/web && npm run build`.~~
 - ~~Live Docker Compose stack boots API, web, workflow, sandbox, Postgres, Redis, MinIO, OPA, and MCP stubs.~~
 - ~~Live Docker health checks pass for OPA, Postgres, Redis, and MinIO.~~
@@ -100,6 +100,7 @@ Legend:
 - ~~Frontend runtime can consume provider SSE through `api.models.stream(...)`, and `/hooks/validate` includes a dry-run provider stream probe for OpenAI, Anthropic, and Google selections.~~
 - ~~JWT auth mode now supports OIDC/JWKS verification: `PRAETOR_JWT_JWKS_URI` or `PRAETOR_OIDC_DISCOVERY_URL` enables RS256 validation against issuer keys before issuer/audience/RBAC checks.~~
 - ~~Production `gate.policy` workflow steps persist first-class `policy_decision` rows linked to asset, workflow run, and step run, including outcome, input hash, rationale, latency, and model/provider context in the rationale.~~
+- ~~Final platform step: MCP OAuth client registrations now persist in `mcp_oauth_connection`; `/mcp/oauth:start`, `/mcp/oauth:callback`, `/mcp/oauth/{connection_id}:refresh`, and `/mcp/oauth/connections` complete the remote MCP authorization-code/token path.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -190,7 +191,8 @@ Legend:
 - ~~Partial: Task 3.3 JSON-RPC MCP session handshake and tool/resource listing/call path exists for stubs.~~
 - ~~Partial: Task 3.3 external write effect-radius enforcement exists for hook calls and proposed-change dispatch.~~
 - ~~Task 3.3 remote MCP OAuth discovery and dynamic client registration exists for servers that advertise RFC 7591 registration endpoints.~~
-- Open: Task 3.3 persist registered MCP OAuth clients and complete authorization-code token exchange.
+- ~~Task 3.3 persisted MCP OAuth clients and authorization-code/token exchange exist for remote OAuth-protected MCP servers.~~
+- Open: Task 3.3 move MCP OAuth secrets/token sets from Postgres JSONB into Vault/secret-manager write APIs.
 - ~~Partial: sandbox runs persist Docker-oriented manifests, orchestrator mode, logs, replay results, and lifecycle state in Postgres.~~
 - ~~Partial: Task 3.4 `apps/sandbox` now exposes a launch service that runs containers through the mounted Docker socket and falls back to deterministic replay.~~
 - ~~Partial: Task 3.4 workflow agent steps invoke the sandbox launch service/replay path before model/finding output is persisted.~~
@@ -267,7 +269,7 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Final platform step: persist registered MCP OAuth clients and complete authorization-code/token exchange.
+1. Move MCP OAuth client secrets/token sets from Postgres JSONB into Vault/secret-manager write APIs.
 2. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
 3. Add live model-stream traces inside workflow step drawers when provider calls run in `live` mode.
 4. Add JWKS refresh-on-unknown-kid and configurable accepted algorithms beyond RS256.

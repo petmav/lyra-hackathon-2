@@ -11,6 +11,7 @@ from praetor_api.models.evidence_checkpoint import EvidenceCheckpoint
 from praetor_api.models.finding import Finding
 from praetor_api.models.hook import Hook
 from praetor_api.models.hook_call import HookCall
+from praetor_api.models.mcp_oauth_connection import McpOAuthConnection
 from praetor_api.models.obligation import Obligation
 from praetor_api.models.policy_decision import PolicyDecision
 from praetor_api.models.proposed_change import ProposedChange
@@ -33,6 +34,7 @@ __all__ = [
     "Finding",
     "Hook",
     "HookCall",
+    "McpOAuthConnection",
     "Obligation",
     "PolicyDecision",
     "ProposedChange",

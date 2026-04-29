@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from praetor_api.models.hook import Hook
 from praetor_api.models.hook_call import HookCall
 from praetor_api.services import mcp_client
+from praetor_api.services.mcp_oauth import oauth_token_for_hook
 from praetor_api.services.json_stack import call_stack, get_stack, stable_hash, validate_stack
 from praetor_api.services.hooks import HOOKS, simulate_hook_outputs
 
@@ -203,7 +204,8 @@ async def test_hook(session: AsyncSession, hook_id: str) -> dict[str, Any]:
             "mode": "json-stack",
             "provider": spec["provider"],
         }
-    result = await mcp_client.health(hook.endpoint, hook.auth_ref)
+    oauth_token = await oauth_token_for_hook(session, hook)
+    result = await mcp_client.health(hook.endpoint, hook.auth_ref if not oauth_token else None, oauth_token=oauth_token)
     if result.ok:
         return {
             "ok": True,
@@ -262,7 +264,15 @@ async def call_hook(
         if hook_result.error:
             errors.append(hook_result.error)
     else:
-        mcp_result = await mcp_client.call(hook.endpoint, operation, inputs, dry_run, hook.auth_ref)
+        oauth_token = await oauth_token_for_hook(session, hook)
+        mcp_result = await mcp_client.call(
+            hook.endpoint,
+            operation,
+            inputs,
+            dry_run,
+            hook.auth_ref if not oauth_token else None,
+            oauth_token=oauth_token,
+        )
         outputs = (
             mcp_result.outputs
             if mcp_result.ok

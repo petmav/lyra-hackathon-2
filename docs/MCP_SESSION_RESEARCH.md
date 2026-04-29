@@ -21,7 +21,14 @@ Praetor implementation:
 
 Still open:
 
-- Persisting dynamically registered OAuth clients and completing the browser/user authorization-code flow after registration.
+- Persisted OAuth client registrations now exist through `mcp_oauth_connection`.
+- Authorization-code callback and token refresh endpoints now store token sets with API responses redacted.
+
+Remaining production hardening:
+
+- Move MCP OAuth client secrets and token sets into Vault/secret-manager write APIs instead of Postgres JSONB.
+- Add provider-specific consent UX around the returned authorization URL.
+- Add refresh-token rotation history and revocation support.
 - Long-lived SSE/stream resumption and server-to-client notifications.
 - Persisted MCP session cache across API process restarts.
 

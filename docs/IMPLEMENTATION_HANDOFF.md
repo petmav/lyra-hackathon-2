@@ -105,6 +105,7 @@ Praetor is now a production-shaped governed agentic workflow platform with:
   - session/protocol headers
 - Added MCP bearer auth refs and stub enforcement.
 - Added remote MCP OAuth discovery and RFC 7591 dynamic client registration when a server advertises a registration endpoint.
+- Added persisted MCP OAuth connections, authorization-code callback exchange, refresh endpoint, and MCP hook token selection from authorized connections.
 
 ### Model Providers
 
@@ -170,7 +171,7 @@ npm test
 
 Latest local result:
 
-- API tests: `41 passed, 1 skipped`
+- API tests: `42 passed, 1 skipped`
 - Workflow tests: `6 passed`
 - Sandbox tests: `1 passed`
 - Web typecheck: passed
@@ -207,24 +208,24 @@ Other verification paths exist for:
 
 The platform is now broadly plug-and-play for demo and initial production wiring. Remaining work is mostly hardening and completing external auth flows.
 
-### Likely Final Platform Step
+### Final Platform Step Completed
 
-Persist registered MCP OAuth clients and complete the authorization-code/token exchange.
+Persisted MCP OAuth clients and authorization-code/token exchange are implemented.
 
-Why this is the most important remaining step:
+What landed:
 
-- MCP OAuth discovery and dynamic client registration already exist.
-- The missing piece is storing registered client metadata, completing authorization, exchanging the code for tokens, refreshing tokens, and binding those tokens back to hook `auth_ref` secrets.
-- This closes the loop for real third-party/remote MCP servers without preconfigured bearer tokens.
+- `mcp_oauth_connection` table and Alembic migration.
+- `POST /mcp/oauth:start` for discovery, dynamic registration, PKCE setup, and authorization URL generation.
+- `POST /mcp/oauth:callback` for authorization-code token exchange.
+- `POST /mcp/oauth/{connection_id}:refresh` for refresh-token renewal.
+- `GET /mcp/oauth/connections` with token/client secrets redacted.
+- MCP hook calls now prefer authorized OAuth access tokens over static bearer refs.
 
-Expected deliverables:
+Remaining hardening:
 
-- DB model/table for MCP OAuth client registrations and token references.
-- API routes to start/complete MCP OAuth authorization.
-- Secure storage of client secret/access token/refresh token through the secret backend.
-- MCP client token resolution from stored OAuth connection IDs.
-- Tests for registration persistence, callback exchange, refresh, and redacted readiness output.
-- Docs showing how to connect a remote OAuth-protected MCP server.
+- Move MCP OAuth client secrets and token sets from Postgres JSONB into Vault/secret-manager write APIs.
+- Add browser consent UX around the returned authorization URL.
+- Add token revocation and refresh-token rotation history.
 
 ### Other Hardening Items
 
