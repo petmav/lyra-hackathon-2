@@ -11,7 +11,7 @@ Legend:
 
 ## Current Verification
 
-- ~~API tests: `25 passed, 1 skipped` via `cd apps/api && python -m pytest`.~~
+- ~~API tests: `27 passed` via `cd apps/api && python -m pytest`.~~
 - ~~Workflow tests: `5 passed` via `scripts/test.ps1`.~~
 - ~~Alembic head exists: `0001 (head)`.~~
 - ~~Compose config validates: `docker compose -f infra/compose/docker-compose.yml config`.~~
@@ -63,7 +63,7 @@ Legend:
 - ~~Web typecheck passes: `cd apps/web && npm run typecheck`.~~
 - ~~Web production build passes: `cd apps/web && npm run build`.~~
 - ~~Compose config validates after env-key/readiness additions: `docker compose -f infra/compose/docker-compose.yml config`.~~
-- ~~Comprehensive live E2E passes against rebuilt production Compose API/web: `python scripts/e2e_platform.py` (`44 passed, 0 failed`, production/postgres).~~
+- ~~Comprehensive live E2E passes against rebuilt production Compose API/web: `python scripts/e2e_platform.py` (`46 passed, 0 failed`, production/postgres).~~
 - ~~Agent workflow steps now execute through the provider-neutral model adapter in `auto`, `live`, or `dry_run` mode.~~
 - ~~Runtime readiness now reports model provider keys and JSON Stack integration secret readiness via `GET /runtime/readiness`, `GET /models/readiness`, and `POST /models:check`.~~
 - ~~JSON Stack hooks resolve `auth_ref` values from environment variables for non-dry-run calls and fail clearly with `missing-secret` when a token is absent.~~
@@ -74,7 +74,11 @@ Legend:
 - ~~Production asset inventory, obligations, controls, and sandbox-run listing now have backend API surfaces and API-mode frontend calls.~~
 - ~~Partial: evidence sweep materializes records from persisted workflow events without demo seeding.~~
 - ~~Sandbox log streaming, hardened isolation defaults, and MCP JSON-RPC stub negotiation are covered by live E2E.~~
-- Open: run the evidence sweep as a true background worker/consumer rather than request-time sweep.
+- ~~Queued workflow execution mode exists: `PRAETOR_WORKFLOW_EXECUTION_MODE=queued` persists runs as queued, `POST /workflow-runs:drain` processes them, and the Compose `workflow` service now runs the drain loop.~~
+- ~~Postgres integration tests cover queued workflow drain execution: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`3 passed`).~~
+- ~~Partial: the Compose `workflow` worker periodically invokes `POST /evidence-records:sweep`, so evidence materialization no longer depends only on frontend/API reads.~~
+- ~~Persisted event reads now reconstruct ordering from hash-chain links, avoiding same-transaction timestamp ordering failures.~~
+- Open: replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
 
 ## Phase 0 - Demo Critical Path
 
@@ -123,7 +127,9 @@ Legend:
 - ~~Partial: production-mode findings, proposed changes, sandbox runs, evidence records, and audit packets persist in Postgres.~~
 - ~~Partial: all bundled deterministic workflow templates are now registered in production mode and can run through Postgres-backed workflow-run and step-run persistence.~~
 - ~~Partial: production pause/resume/cancel and retry-attempt metadata exist for persisted workflow step runs.~~
-- Open: durable worker scheduling and parallel branch execution for those workflow templates.
+- ~~Partial: durable queued workflow scheduling exists through persisted `queued` workflow runs, pending step rows, a drain endpoint, and the Compose workflow worker.~~
+- ~~Partial: ready DAG branches are scheduled in batches during queued drain processing.~~
+- Open: fully asynchronous distributed node-run leasing, retries across worker restarts, and per-step process isolation for all step types.
 - ~~Frontend API client calls `NEXT_PUBLIC_API_BASE` for implemented backend routes with fixture fallbacks for frontend-only surfaces.~~
 - ~~Frontend stream client opens real FastAPI WebSockets when `NEXT_PUBLIC_API_BASE` is set and `NEXT_PUBLIC_MOCK_STREAMS` is not `1`.~~
 - Open: verify Northwind CLI against a running API process.
@@ -140,7 +146,9 @@ Legend:
 - ~~Partial: production hook registry and hook-call persistence exists for deterministic MCP stub operations.~~
 - ~~Partial: Task 3.2 production mode persists graph-shaped deterministic runs for every bundled template.~~
 - ~~Partial: Task 3.2 persisted pause/resume/cancel and retry-attempt state for synchronous production workflow runs.~~
-- Open: Task 3.2 parallel branch scheduling, async worker dispatch, and durable queued/running node-run state machine.
+- ~~Partial: Task 3.2 queued workflow dispatch exists through `PRAETOR_WORKFLOW_EXECUTION_MODE=queued`, `POST /workflow-runs:drain`, and the workflow worker container.~~
+- ~~Partial: Task 3.2 ready branch batches execute concurrently inside a drain cycle.~~
+- Open: Task 3.2 distributed node-run leases, worker-heartbeat recovery, and true long-running async step isolation.
 - ~~Partial: Task 3.3 MCP client adapter boundary exists for hook health/calls, and MCP stubs now expose `/call`.~~
 - ~~Partial: Task 3.3 JSON-RPC MCP session handshake and tool/resource listing/call path exists for stubs.~~
 - Open: Task 3.3 authenticated MCP sessions and richer production tool/resource negotiation beyond stubs.
@@ -163,7 +171,8 @@ Legend:
 - ~~Task 4.5: Obligation graph view exists in frontend fixture UI.~~
 - ~~Partial: evidence records can be generated from persisted event history.~~
 - ~~Partial: evidence sweep assembles records from persisted workflow events and audit generation invokes it.~~
-- Open: evidence worker that continuously assembles records from events and policy decisions.
+- ~~Partial: evidence worker loop periodically materializes records from workflow events through the production sweep endpoint.~~
+- Open: policy-decision-aware evidence assembly and event-consumer checkpoints.
 - ~~Ed25519 signing for generated audit packets.~~
 - ~~PDF artifact output exists for generated audit packets.~~
 - ~~JSON sidecar output.~~
@@ -206,8 +215,8 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add parallel branch scheduling and async worker dispatch on top of the persisted pause/resume/cancel slice.
-2. Add true background evidence and workflow workers instead of request-time sweeps/synchronous runs.
+1. Add distributed node-run leases, worker heartbeat recovery, and per-step isolation to the queued workflow worker.
+2. Replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
 3. Persist user-provided JSON Stack manifests as first-class hook configuration records; `auth_ref` secret resolution now exists for catalog-backed stacks.
 4. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
 5. Add provider-specific model streaming support.

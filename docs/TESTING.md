@@ -29,6 +29,7 @@ The E2E suite checks:
 - Model provider registry and offline provider checks.
 - Assets, obligations, and controls endpoints.
 - Workflow catalog and `code_compliance_scan_full` execution.
+- Runtime config and workflow drain endpoint availability.
 - Workflow event hash-chain continuity.
 - Proposed-change read, sandbox run, approve, and apply lifecycle.
 - Hook catalog, JSON Stack catalog, JSON Stack preview, and missing-secret failure behavior.
@@ -37,6 +38,8 @@ The E2E suite checks:
 - Findings, evidence sweep, evidence records, and audit-packet generation.
 - Sandbox lifecycle plus newline-delimited sandbox log streaming.
 - Main web routes against the live API-backed frontend.
+
+Latest live run: `46 passed, 0 failed` against production/Postgres Compose.
 
 Use `--skip-web` when testing only the API stack:
 

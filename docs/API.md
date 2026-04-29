@@ -86,12 +86,17 @@ Non-dry-run JSON Stack calls resolve `auth_ref` values from environment variable
 - `GET /workflow-runs`
 - `POST /workflow-runs/{id}:resume`
 - `POST /workflow-runs/{id}:cancel`
+- `POST /workflow-runs:drain`
 - `GET /events?workflow_run_id=...`
 - `GET /events?asset_id=...`
 - `WS /ws/v1/workflow-runs/{id}/stream?token=dev`
 - `WS /ws/v1/assets/{id}/stream?token=dev`
 
 Workflow runs accept `model_provider` and `model` at request time.
+Set `PRAETOR_WORKFLOW_EXECUTION_MODE=sync` to execute a run inside the API request, or
+`PRAETOR_WORKFLOW_EXECUTION_MODE=queued` to persist runs as `queued` and let the workflow worker
+drain them through `POST /workflow-runs:drain`. The Compose `workflow` service runs this drain loop
+and periodically calls `POST /evidence-records:sweep` to materialize evidence in the background.
 
 Workflow definition responses include the full frontend contract: `trigger_config`, `inputs_schema`,
 `outputs_schema`, `required_hooks`, `required_corpora`, `default_policy_set`, and optional
