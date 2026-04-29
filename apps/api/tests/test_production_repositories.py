@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -8,6 +9,7 @@ if os.getenv("PRAETOR_RUN_DB_TESTS") != "1":
 from praetor_api.db import AsyncSessionLocal
 from praetor_api.models.asset import Asset
 from praetor_api.models.sandbox_run import SandboxRun
+from praetor_api.models.step_run import StepRun
 from praetor_api.services import production_corpus, production_hooks, production_inventory, production_reviews
 from praetor_api.services import production_workflows
 from sqlalchemy import select
@@ -94,9 +96,50 @@ async def test_queued_workflow_drain_executes_persisted_run() -> None:
     assert processed[0]["id"] == queued["id"]
     assert processed[0]["status"] == "succeeded"
     assert processed[0]["outputs"]["findings"][0]["severity"] == "high"
+    assert all(step["lease_owner"] is None for step in processed[0]["step_runs"])
+    assert all(step["attempt_count"] >= 1 for step in processed[0]["step_runs"])
     scan_step = next(step for step in processed[0]["step_runs"] if step["step_id"] == "scan")
     assert scan_step["sandbox_run_id"].startswith("sbx_")
     assert scan_step["outputs_redacted"]["sandbox"]["mode"] in {"replay", "docker", "docker-socket"}
+
+
+@pytest.mark.asyncio
+async def test_expired_step_lease_recovers_to_pending() -> None:
+    async with AsyncSessionLocal() as session:
+        queued = await production_workflows.enqueue_workflow_run(
+            session,
+            "code_compliance_scan",
+            {"repo_url": "stub://support-bot"},
+            model_provider="openai",
+            model="gpt-5.4-mini",
+        )
+        run = await production_workflows._find_workflow_run(session, queued["id"])
+        assert run is not None
+        step = await session.scalar(
+            select(StepRun).where(StepRun.workflow_run_id == run.id, StepRun.step_id == "pull")
+        )
+        assert step is not None
+        step.status = "running"
+        step.lease_owner = "dead-worker"
+        step.lease_expires_at = datetime.now(UTC) - timedelta(seconds=10)
+        step.heartbeat_at = datetime.now(UTC) - timedelta(seconds=20)
+        await session.commit()
+
+    async with AsyncSessionLocal() as session:
+        recovered = await production_workflows.recover_expired_step_leases(session)
+
+    assert recovered >= 1
+
+    async with AsyncSessionLocal() as session:
+        run = await production_workflows._find_workflow_run(session, queued["id"])
+        assert run is not None
+        step = await session.scalar(
+            select(StepRun).where(StepRun.workflow_run_id == run.id, StepRun.step_id == "pull")
+        )
+
+    assert step is not None
+    assert step.status == "pending"
+    assert step.lease_owner is None
 
 
 @pytest.mark.asyncio

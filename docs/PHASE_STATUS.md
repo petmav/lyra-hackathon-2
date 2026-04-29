@@ -29,6 +29,7 @@ Legend:
 - ~~Alembic upgrade succeeds against the live Postgres container and creates the initial 19-table schema.~~
 - ~~TimescaleDB migration path is optional when the active Postgres image lacks the extension; base schema still applies.~~
 - ~~Production workflow persistence smoke test passes inside the API container: `code_compliance_scan` writes and reads workflow, asset, workflow-run, step-run, and finding rows in Postgres.~~
+- ~~Step-run lease migration applied: `alembic upgrade head` now includes `0002_step_run_leases` for lease owner, lease expiry, heartbeat, and attempt count.~~
 - ~~Production event persistence smoke test passes inside the API container: `code_compliance_scan` writes six `agent_event` rows and reads a valid hash chain back from Postgres.~~
 - ~~Production hook persistence smoke test passes inside the API container: hook registry rows are seeded and `github_stub/open_pr` writes a `hook_call` row.~~
 - ~~Production corpus persistence smoke test passes inside the API container: corpus rows are seeded, document/chunk rows are persisted, lexical search returns the expected top hit, and document counts update.~~
@@ -76,7 +77,9 @@ Legend:
 - ~~Partial: evidence sweep materializes records from persisted workflow events without demo seeding.~~
 - ~~Sandbox log streaming, hardened isolation defaults, and MCP JSON-RPC stub negotiation are covered by live E2E.~~
 - ~~Queued workflow execution mode exists: `PRAETOR_WORKFLOW_EXECUTION_MODE=queued` persists runs as queued, `POST /workflow-runs:drain` processes them, and the Compose `workflow` service now runs the drain loop.~~
-- ~~Postgres integration tests cover queued workflow drain execution: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`3 passed`).~~
+- ~~Postgres integration tests cover queued workflow drain execution: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`4 passed`).~~
+- ~~Workflow worker hardening: queued drain now passes a stable worker id and lease TTL; ready `step_run` rows are leased with owner/expiry/heartbeat/attempt count and expired running leases recover to pending on the next drain.~~
+- ~~Postgres integration tests cover expired workflow step lease recovery: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`4 passed`).~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
 - ~~Production workflow events now persist step-start, semantic step trace events, and step-finished records for each workflow step without exposing private chain-of-thought.~~
@@ -136,7 +139,8 @@ Legend:
 - ~~Partial: production pause/resume/cancel and retry-attempt metadata exist for persisted workflow step runs.~~
 - ~~Partial: durable queued workflow scheduling exists through persisted `queued` workflow runs, pending step rows, a drain endpoint, and the Compose workflow worker.~~
 - ~~Partial: ready DAG branches are scheduled in batches during queued drain processing.~~
-- Open: fully asynchronous distributed node-run leasing, retries across worker restarts, and per-step process isolation for all step types.
+- ~~Partial: distributed node-run leasing and restart recovery now exist through persisted step leases, heartbeat timestamps, attempt counts, row locks, and expired-lease recovery.~~
+- Open: per-step process isolation for all non-agent step types and continuous heartbeat while a long-running executor is still active.
 - ~~Frontend API client calls `NEXT_PUBLIC_API_BASE` for implemented backend routes with fixture fallbacks for frontend-only surfaces.~~
 - ~~Frontend stream client opens real FastAPI WebSockets when `NEXT_PUBLIC_API_BASE` is set and `NEXT_PUBLIC_MOCK_STREAMS` is not `1`.~~
 - Open: verify Northwind CLI against a running API process.
@@ -155,7 +159,8 @@ Legend:
 - ~~Partial: Task 3.2 persisted pause/resume/cancel and retry-attempt state for synchronous production workflow runs.~~
 - ~~Partial: Task 3.2 queued workflow dispatch exists through `PRAETOR_WORKFLOW_EXECUTION_MODE=queued`, `POST /workflow-runs:drain`, and the workflow worker container.~~
 - ~~Partial: Task 3.2 ready branch batches execute concurrently inside a drain cycle.~~
-- Open: Task 3.2 distributed node-run leases, worker-heartbeat recovery, and true long-running async step isolation.
+- ~~Partial: Task 3.2 distributed node-run leases and worker restart recovery now exist for persisted queued workflow steps.~~
+- Open: Task 3.2 true long-running async step isolation and live executor heartbeat while work is still in progress.
 - ~~Partial: Task 3.6 workflow agent steps are now represented as first-class `workflow_agent` assets and linked to sandbox runs.~~
 - ~~Partial: Task 3.3 MCP client adapter boundary exists for hook health/calls, and MCP stubs now expose `/call`.~~
 - ~~Partial: Task 3.3 JSON-RPC MCP session handshake and tool/resource listing/call path exists for stubs.~~
@@ -225,7 +230,7 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add distributed node-run leases, worker heartbeat recovery, and per-step isolation to the queued workflow worker.
+1. Move full workflow-agent tool/model execution inside the sandbox process instead of backend-orchestrated deterministic/provider code.
 2. Replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
 3. Persist user-provided JSON Stack manifests as first-class hook configuration records; `auth_ref` secret resolution now exists for catalog-backed stacks.
 4. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.

@@ -5,6 +5,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from uuid import uuid4
 
 
 def _post_json(url: str, payload: dict, token: str) -> dict:
@@ -26,10 +27,13 @@ def main() -> None:
     token = os.getenv("DEV_BEARER", "dev")
     interval = float(os.getenv("PRAETOR_WORKFLOW_WORKER_INTERVAL_SECONDS", "2"))
     batch_size = int(os.getenv("PRAETOR_WORKFLOW_WORKER_BATCH_SIZE", "4"))
+    lease_seconds = int(os.getenv("PRAETOR_WORKFLOW_STEP_LEASE_SECONDS", "300"))
+    worker_id = os.getenv("PRAETOR_WORKFLOW_WORKER_ID") or f"workflow-worker-{uuid4().hex[:8]}"
     evidence_sweep_every = max(1, int(os.getenv("PRAETOR_EVIDENCE_SWEEP_EVERY_TICKS", "15")))
     print(
         "praetor workflow worker started "
-        f"api_base={api_base} interval={interval}s batch_size={batch_size} "
+        f"api_base={api_base} worker_id={worker_id} interval={interval}s "
+        f"batch_size={batch_size} lease_seconds={lease_seconds} "
         f"evidence_sweep_every={evidence_sweep_every}",
         flush=True,
     )
@@ -38,7 +42,11 @@ def main() -> None:
         try:
             result = _post_json(
                 f"{api_base}/workflow-runs:drain",
-                {"limit": batch_size},
+                {
+                    "limit": batch_size,
+                    "worker_id": worker_id,
+                    "lease_seconds": lease_seconds,
+                },
                 token,
             )
             count = int(result.get("count", 0))

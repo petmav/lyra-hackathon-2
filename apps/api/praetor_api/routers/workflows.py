@@ -31,6 +31,8 @@ class ResumeWorkflowRequest(BaseModel):
 
 class DrainWorkflowRequest(BaseModel):
     limit: int = 1
+    worker_id: str | None = None
+    lease_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 @router.get("/workflows")
@@ -100,6 +102,8 @@ async def drain_workflow_runs(request: DrainWorkflowRequest) -> dict[str, Any]:
         processed = await production_workflows.drain_queued_workflows(
             session,
             limit=request.limit,
+            worker_id=request.worker_id,
+            lease_seconds=request.lease_seconds,
         )
     return {"processed": processed, "count": len(processed)}
 

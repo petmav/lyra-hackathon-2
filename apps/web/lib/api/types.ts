@@ -193,6 +193,10 @@ export interface StepRun {
   finished_at?: ISOTimestamp;
   inputs_redacted: Record<string, unknown>;
   outputs_redacted: Record<string, unknown>;
+  lease_owner?: string;
+  lease_expires_at?: ISOTimestamp;
+  heartbeat_at?: ISOTimestamp;
+  attempt_count?: number;
   sandbox_run_id?: ID;
   hook_call_id?: ID;
   policy_decision_id?: ID;

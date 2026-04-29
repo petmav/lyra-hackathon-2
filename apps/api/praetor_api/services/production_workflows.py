@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -29,6 +29,7 @@ WORKFLOW_RUN_URN_PREFIX = "urn:praetor:workflow-run:"
 WORKFLOW_AGENT_URN_PREFIX = "urn:praetor:asset:workflow_agent:"
 FINDING_URN_PREFIX = "urn:praetor:finding:"
 PROPOSED_CHANGE_URN_PREFIX = "urn:praetor:proposed_change:"
+DEFAULT_STEP_LEASE_SECONDS = 300
 
 
 WORKFLOW_TEMPLATES: dict[str, dict[str, Any]] = {
@@ -311,11 +312,19 @@ async def enqueue_workflow_run(
     return await workflow_run_by_id(session, run_slug) or {"id": run_slug, "status": initial_status}
 
 
-async def drain_queued_workflows(session: AsyncSession, *, limit: int = 1) -> list[dict[str, Any]]:
+async def drain_queued_workflows(
+    session: AsyncSession,
+    *,
+    limit: int = 1,
+    worker_id: str | None = None,
+    lease_seconds: int = DEFAULT_STEP_LEASE_SECONDS,
+) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 25))
+    worker_id = worker_id or f"api-drain-{uuid4().hex[:8]}"
+    await recover_expired_step_leases(session)
     result = await session.execute(
         select(WorkflowRun)
-        .where(WorkflowRun.status == "queued")
+        .where(WorkflowRun.status.in_(["queued", "running"]))
         .order_by(WorkflowRun.created_at)
         .limit(limit)
         .with_for_update(skip_locked=True)
@@ -324,18 +333,70 @@ async def drain_queued_workflows(session: AsyncSession, *, limit: int = 1) -> li
     processed: list[dict[str, Any]] = []
     for row in queued:
         run_id = _entity_slug(row.urn, WORKFLOW_RUN_URN_PREFIX)
-        run = await process_workflow_run(session, run_id)
+        run = await process_workflow_run(
+            session,
+            run_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
         if run is not None:
             processed.append(run)
     return processed
 
 
-async def process_workflow_run(session: AsyncSession, run_id: str) -> dict[str, Any] | None:
+async def recover_expired_step_leases(
+    session: AsyncSession,
+    *,
+    run_record_id: UUID | None = None,
+    now: datetime | None = None,
+) -> int:
+    now = now or datetime.now(UTC)
+    query = select(StepRun).where(
+        StepRun.status == "running",
+        StepRun.lease_expires_at.is_not(None),
+        StepRun.lease_expires_at < now,
+    )
+    if run_record_id is not None:
+        query = query.where(StepRun.workflow_run_id == run_record_id)
+    result = await session.execute(query.with_for_update(skip_locked=True))
+    expired = list(result.scalars().all())
+    for row in expired:
+        row.status = "pending"
+        row.lease_owner = None
+        row.lease_expires_at = None
+        row.heartbeat_at = now
+        row.outputs_redacted = {
+            **(row.outputs_redacted or {}),
+            "recovered_from_expired_lease_at": now.isoformat(),
+        }
+    if expired:
+        run_ids = {row.workflow_run_id for row in expired}
+        run_result = await session.execute(select(WorkflowRun).where(WorkflowRun.id.in_(run_ids)))
+        for run in run_result.scalars().all():
+            if run.status == "running":
+                run.outputs = {
+                    **(run.outputs or {}),
+                    "last_recovered_at": now.isoformat(),
+                }
+        await session.commit()
+    return len(expired)
+
+
+async def process_workflow_run(
+    session: AsyncSession,
+    run_id: str,
+    *,
+    worker_id: str | None = None,
+    lease_seconds: int = DEFAULT_STEP_LEASE_SECONDS,
+) -> dict[str, Any] | None:
     workflow_run = await _find_workflow_run(session, run_id)
     if workflow_run is None:
         return None
     if workflow_run.status not in {"queued", "running"}:
         return await workflow_run_by_id(session, run_id)
+    worker_id = worker_id or f"api-process-{uuid4().hex[:8]}"
+    lease_seconds = max(30, min(lease_seconds, 3600))
+    await recover_expired_step_leases(session, run_record_id=workflow_run.id)
 
     outputs = workflow_run.outputs or {}
     template = _template_for(outputs.get("workflow_id", CODE_COMPLIANCE_SCAN["id"]))
@@ -401,7 +462,7 @@ async def process_workflow_run(session: AsyncSession, run_id: str) -> dict[str, 
             break
 
         for step in pending:
-            row_by_step[step["id"]].status = "running"
+            _lease_step(row_by_step[step["id"]], worker_id, lease_seconds)
         await session.commit()
 
         results = await asyncio.gather(
@@ -421,10 +482,14 @@ async def process_workflow_run(session: AsyncSession, run_id: str) -> dict[str, 
 
         for step, (step_outputs, step_status) in zip(pending, results, strict=True):
             row = row_by_step[step["id"]]
+            _heartbeat_step(row, worker_id, lease_seconds)
             emitted = step_outputs.get("emitted", [])
             proposed = step_outputs.get("proposed_changes", [])
             row.status = step_status
             row.outputs_redacted = step_outputs
+            row.lease_owner = None
+            row.lease_expires_at = None
+            row.heartbeat_at = datetime.now(UTC)
             row.emitted_finding_ids = [
                 item["id"] for item in emitted if isinstance(item, dict) and "id" in item
             ]
@@ -473,6 +538,22 @@ async def process_workflow_run(session: AsyncSession, run_id: str) -> dict[str, 
     await production_reviews.sweep_evidence_records(session)
     await session.commit()
     return run
+
+
+def _lease_step(row: StepRun, worker_id: str, lease_seconds: int) -> None:
+    now = datetime.now(UTC)
+    row.status = "running"
+    row.lease_owner = worker_id
+    row.lease_expires_at = now + timedelta(seconds=lease_seconds)
+    row.heartbeat_at = now
+    row.attempt_count = int(row.attempt_count or 0) + 1
+
+
+def _heartbeat_step(row: StepRun, worker_id: str, lease_seconds: int) -> None:
+    now = datetime.now(UTC)
+    row.lease_owner = worker_id
+    row.lease_expires_at = now + timedelta(seconds=lease_seconds)
+    row.heartbeat_at = now
 
 
 async def _persist_findings_and_proposals(
@@ -770,6 +851,10 @@ def _workflow_run_to_api(row: WorkflowRun, steps: list[StepRun]) -> dict[str, An
                 "sandbox_run_id": _sandbox_id(step.sandbox_run_id),
                 "inputs_redacted": step.inputs_redacted,
                 "outputs_redacted": step.outputs_redacted,
+                "lease_owner": step.lease_owner,
+                "lease_expires_at": step.lease_expires_at.isoformat() if step.lease_expires_at else None,
+                "heartbeat_at": step.heartbeat_at.isoformat() if step.heartbeat_at else None,
+                "attempt_count": step.attempt_count,
                 "emitted_finding_ids": step.emitted_finding_ids,
                 "emitted_proposal_ids": step.emitted_proposal_ids,
                 "depends_on": depends_by_step.get(step.step_id, []),
