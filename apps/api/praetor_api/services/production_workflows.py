@@ -535,7 +535,7 @@ async def process_workflow_run(
     await _publish_run_events(session, asset, workflow_run, run, workflow_run.inputs)
     from praetor_api.services import production_reviews
 
-    await production_reviews.sweep_evidence_records(session)
+    await production_reviews.consume_evidence_events(session)
     await session.commit()
     return run
 
@@ -682,7 +682,7 @@ async def resume_workflow_run(
             await _publish_resume_events(session, asset, workflow_run, [awaiting_step], run)
             from praetor_api.services import production_reviews
 
-            await production_reviews.sweep_evidence_records(session)
+            await production_reviews.consume_evidence_events(session)
             await session.commit()
         return run
 
@@ -749,7 +749,7 @@ async def resume_workflow_run(
         await _publish_resume_events(session, asset, workflow_run, [awaiting_step, *new_steps], run)
         from praetor_api.services import production_reviews
 
-        await production_reviews.sweep_evidence_records(session)
+        await production_reviews.consume_evidence_events(session)
         await session.commit()
     return run
 

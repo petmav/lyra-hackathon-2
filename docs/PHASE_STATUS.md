@@ -12,7 +12,7 @@ Legend:
 ## Current Verification
 
 - ~~API tests: `27 passed` via `cd apps/api && python -m pytest`.~~
-- ~~Workflow tests: `5 passed` via `scripts/test.ps1` / `npm test`.~~
+- ~~Workflow tests: `6 passed` via `scripts/test.ps1` / `npm test`.~~
 - ~~Alembic head exists: `0001 (head)`.~~
 - ~~Compose config validates: `docker compose -f infra/compose/docker-compose.yml config`.~~
 - ~~Compose production env validates with `PRAETOR_ENV_FILE=.env.production.example`.~~
@@ -80,6 +80,8 @@ Legend:
 - ~~Postgres integration tests cover queued workflow drain execution: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`4 passed`).~~
 - ~~Workflow worker hardening: queued drain now passes a stable worker id and lease TTL; ready `step_run` rows are leased with owner/expiry/heartbeat/attempt count and expired running leases recover to pending on the next drain.~~
 - ~~Postgres integration tests cover expired workflow step lease recovery: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`4 passed`).~~
+- ~~Evidence worker v2: `evidence_checkpoint` table tracks consumer progress through persisted `agent_event` rows; `POST /evidence-records:consume` incrementally creates idempotent evidence from events, policy decisions, controls, and YAML obligations.~~
+- ~~Workflow worker now calls `POST /evidence-records:consume` instead of the legacy run sweep endpoint.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -88,7 +90,9 @@ Legend:
 - ~~Production obligations now hydrate idempotently from bundled YAML files, with Docker-package fallback content and demo static fallback.~~
 - ~~Partial: the Compose `workflow` worker periodically invokes `POST /evidence-records:sweep`, so evidence materialization no longer depends only on frontend/API reads.~~
 - ~~Persisted event reads now reconstruct ordering from hash-chain links, avoiding same-transaction timestamp ordering failures.~~
-- Open: replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
+- ~~Partial: polling evidence sweeps are replaced by a checkpointed event consumer over persisted event history with policy-decision and obligation mapping hooks.~~
+- ~~Live evidence consumer smoke passes against Compose production API: `POST /evidence-records:consume` created checkpointed evidence records and returned the `evidence-worker-v2` checkpoint.~~
+- Open: consume directly from Redis Streams with durable stream IDs instead of polling persisted `agent_event` rows.
 
 ## Phase 0 - Demo Critical Path
 
@@ -189,7 +193,8 @@ Legend:
 - ~~Partial: evidence records can be generated from persisted event history.~~
 - ~~Partial: evidence sweep assembles records from persisted workflow events and audit generation invokes it.~~
 - ~~Partial: evidence worker loop periodically materializes records from workflow events through the production sweep endpoint.~~
-- Open: policy-decision-aware evidence assembly and event-consumer checkpoints.
+- ~~Partial: evidence assembly now uses event-consumer checkpoints and attaches policy decisions plus obligation mappings where available.~~
+- Open: first-class policy decision persistence for workflow gates and a Redis Streams consumer group.
 - ~~Ed25519 signing for generated audit packets.~~
 - ~~PDF artifact output exists for generated audit packets.~~
 - ~~JSON sidecar output.~~
@@ -232,13 +237,12 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Evidence worker v2 with event-stream consumer checkpoints and policy-decision-aware assembly.
-2. Replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
-3. Persist user-provided JSON Stack manifests as first-class hook configuration records; `auth_ref` secret resolution now exists for catalog-backed stacks.
-4. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
-5. Add provider-specific model streaming support.
-6. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.
-7. Convert on-demand evidence generation into a continuous event/policy worker.
+1. Real GitHub PR integration with approval/effect-radius enforcement.
+2. Persist user-provided JSON Stack manifests as first-class hook configuration records; `auth_ref` secret resolution now exists for catalog-backed stacks.
+3. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
+4. Add provider-specific model streaming support.
+5. Replace dev bearer/plain env API keys with real auth and vault-backed secret management.
+6. Convert the checkpointed evidence consumer from persisted `agent_event` polling to Redis Streams consumer groups.
 
 ## Update Rules For Future Work
 

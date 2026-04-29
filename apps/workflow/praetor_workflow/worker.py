@@ -57,8 +57,8 @@ def main() -> None:
         tick += 1
         if tick % evidence_sweep_every == 0:
             try:
-                result = _post_json(f"{api_base}/evidence-records:sweep", {}, token)
-                created = int(result.get("created", 0))
+                result = _post_json(f"{api_base}/evidence-records:consume", {}, token)
+                created = int(result.get("count", result.get("created", 0)))
                 if created:
                     print(f"praetor evidence worker materialized {created} record(s)", flush=True)
             except (urllib.error.URLError, TimeoutError, ValueError) as exc:

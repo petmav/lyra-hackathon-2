@@ -7,6 +7,7 @@ from praetor_api.models.corpus import Corpus
 from praetor_api.models.document import Document
 from praetor_api.models.document_chunk import DocumentChunk
 from praetor_api.models.evidence_record import EvidenceRecord
+from praetor_api.models.evidence_checkpoint import EvidenceCheckpoint
 from praetor_api.models.finding import Finding
 from praetor_api.models.hook import Hook
 from praetor_api.models.hook_call import HookCall
@@ -28,6 +29,7 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "EvidenceRecord",
+    "EvidenceCheckpoint",
     "Finding",
     "Hook",
     "HookCall",

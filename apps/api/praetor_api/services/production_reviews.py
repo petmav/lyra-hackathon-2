@@ -9,19 +9,23 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from praetor_api.models.agent_event import AgentEvent
 from praetor_api.models.asset import Asset
 from praetor_api.models.audit_packet import AuditPacket
 from praetor_api.models.evidence_record import EvidenceRecord
+from praetor_api.models.evidence_checkpoint import EvidenceCheckpoint
 from praetor_api.models.finding import Finding
 from praetor_api.models.hook import Hook
+from praetor_api.models.obligation import Obligation
+from praetor_api.models.policy_decision import PolicyDecision
 from praetor_api.models.proposed_change import ProposedChange
 from praetor_api.models.sandbox_run import SandboxRun
 from praetor_api.models.workflow_run import WorkflowRun
 from praetor_api.services.production_hooks import ensure_hooks
+from praetor_api.services import production_inventory
 from praetor_api.services.production_workflows import ASSET_EXTERNAL_ID, ASSET_URN
 from praetor_api.settings import get_settings
 
@@ -333,7 +337,8 @@ async def list_evidence_records(session: AsyncSession) -> list[dict[str, Any]]:
     rows = list(result.scalars().all())
     if not rows and get_settings().seed_demo_data:
         rows = [await generate_evidence_record(session)]
-    return [_evidence_to_api(row) for row in rows]
+    obligations = await _obligations_by_id(session, rows)
+    return [_evidence_to_api(row, obligations) for row in rows]
 
 
 async def generate_evidence_record(session: AsyncSession) -> EvidenceRecord:
@@ -404,8 +409,80 @@ async def sweep_evidence_records(session: AsyncSession) -> list[EvidenceRecord]:
     return created
 
 
+async def consume_evidence_events(
+    session: AsyncSession,
+    *,
+    consumer: str = "evidence-worker-v2",
+    limit: int = 100,
+) -> dict[str, Any]:
+    limit = max(1, min(limit, 500))
+    checkpoint = await _evidence_checkpoint(session, consumer)
+    query = select(AgentEvent).order_by(AgentEvent.ts, AgentEvent.id).limit(limit)
+    if checkpoint.last_event_ts is not None:
+        query = query.where(
+            or_(
+                AgentEvent.ts > checkpoint.last_event_ts,
+                and_(AgentEvent.ts == checkpoint.last_event_ts, AgentEvent.id > checkpoint.last_event_id),
+            )
+        )
+    result = await session.execute(query)
+    events = list(result.scalars().all())
+    if not events:
+        return {"created": [], "count": 0, "checkpoint": _checkpoint_to_api(checkpoint)}
+
+    await production_inventory.ensure_obligations(session)
+    obligation_by_urn = await _obligation_by_urn(session)
+    groups: dict[UUID, list[AgentEvent]] = {}
+    asset_events: list[AgentEvent] = []
+    for event in events:
+        if event.workflow_run_id is not None:
+            groups.setdefault(event.workflow_run_id, []).append(event)
+        else:
+            asset_events.append(event)
+
+    created: list[EvidenceRecord] = []
+    for workflow_run_id, run_events in groups.items():
+        workflow_run = await session.get(WorkflowRun, workflow_run_id)
+        if workflow_run is None:
+            continue
+        created.extend(
+            await _create_evidence_from_events(
+                session,
+                events=run_events,
+                obligation_by_urn=obligation_by_urn,
+                control_id=_control_for_events(run_events),
+                asset_id=workflow_run.asset_id,
+                workflow_run_id=workflow_run.id,
+            )
+        )
+    for event in asset_events:
+        created.extend(
+            await _create_evidence_from_events(
+                session,
+                events=[event],
+                obligation_by_urn=obligation_by_urn,
+                control_id=_control_for_events([event]),
+                asset_id=event.asset_id,
+                workflow_run_id=None,
+            )
+        )
+
+    last = events[-1]
+    checkpoint.last_event_id = last.id
+    checkpoint.last_event_ts = last.ts
+    checkpoint.updated_at = _now()
+    await session.commit()
+    for row in created:
+        await session.refresh(row)
+    return {
+        "created": [_external_id(row.urn, EVIDENCE_URN_PREFIX) for row in created],
+        "count": len(created),
+        "checkpoint": _checkpoint_to_api(checkpoint),
+    }
+
+
 async def generate_audit_packet(session: AsyncSession) -> dict[str, Any]:
-    await sweep_evidence_records(session)
+    await consume_evidence_events(session)
     evidence = await list_evidence_records(session)
     period_start = _now()
     period_end = _now()
@@ -560,11 +637,144 @@ def _sandbox_to_api(row: SandboxRun, proposal: ProposedChange | None) -> dict[st
     }
 
 
-def _evidence_to_api(row: EvidenceRecord) -> dict[str, Any]:
+async def _evidence_checkpoint(session: AsyncSession, consumer: str) -> EvidenceCheckpoint:
+    result = await session.execute(select(EvidenceCheckpoint).where(EvidenceCheckpoint.consumer == consumer))
+    checkpoint = result.scalar_one_or_none()
+    if checkpoint is None:
+        checkpoint = EvidenceCheckpoint(consumer=consumer, updated_at=_now())
+        session.add(checkpoint)
+        await session.flush()
+    return checkpoint
+
+
+async def _create_evidence_from_events(
+    session: AsyncSession,
+    *,
+    events: list[AgentEvent],
+    obligation_by_urn: dict[str, Obligation],
+    control_id: str,
+    asset_id: UUID | None,
+    workflow_run_id: UUID | None,
+) -> list[EvidenceRecord]:
+    event_ids = [event.run_id or f"evt_{event.id.hex[:12]}" for event in events]
+    decision_ids = await _decision_ids_for_events(session, events)
+    obligation_urns = _obligations_for_events(events, control_id)
+    if not obligation_urns:
+        obligation_urns = ["urn:praetor:obligation:internal:data_min_3_2"]
+    created: list[EvidenceRecord] = []
+    for obligation_urn in obligation_urns:
+        obligation = obligation_by_urn.get(obligation_urn)
+        obligation_id = obligation.id if obligation is not None else None
+        payload = {
+            "obligation_urn": obligation_urn,
+            "control_id": control_id,
+            "asset_id": str(asset_id) if asset_id else None,
+            "workflow_run_id": str(workflow_run_id) if workflow_run_id else None,
+            "event_ids": event_ids,
+            "decision_ids": decision_ids,
+        }
+        digest = _hash(payload)
+        exists = await session.scalar(select(EvidenceRecord.id).where(EvidenceRecord.hash == digest).limit(1))
+        if exists is not None:
+            continue
+        evidence_id = f"ev_{uuid4().hex[:12]}"
+        evidence = EvidenceRecord(
+            urn=f"{EVIDENCE_URN_PREFIX}{evidence_id}",
+            obligation_id=obligation_id,
+            control_id=control_id,
+            asset_id=asset_id,
+            workflow_run_id=workflow_run_id,
+            event_ids=event_ids,
+            decision_ids=decision_ids,
+            hash=digest,
+        )
+        session.add(evidence)
+        created.append(evidence)
+    return created
+
+
+async def _decision_ids_for_events(session: AsyncSession, events: list[AgentEvent]) -> list[str]:
+    workflow_run_ids = {event.workflow_run_id for event in events if event.workflow_run_id is not None}
+    if not workflow_run_ids:
+        return []
+    result = await session.execute(select(PolicyDecision).where(PolicyDecision.workflow_run_id.in_(workflow_run_ids)))
+    return [f"dec_{row.id.hex[:12]}" for row in result.scalars().all()]
+
+
+def _obligations_for_events(events: list[AgentEvent], control_id: str) -> list[str]:
+    obligations: list[str] = []
+    for event in events:
+        payload = event.payload or {}
+        obligations.extend(_obligation_urns_from_value(payload))
+    for control in production_inventory.list_controls():
+        if control["id"] == control_id or control["package"].endswith(control_id):
+            obligations.extend(control.get("obligations_implemented", []))
+    return sorted(set(obligations))
+
+
+def _obligation_urns_from_value(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, nested in value.items():
+            if key in {"obligations_cited", "obligations_addressed", "obligation_ids"} and isinstance(nested, list):
+                found.extend(str(item) for item in nested if isinstance(item, str))
+            else:
+                found.extend(_obligation_urns_from_value(nested))
+        return found
+    if isinstance(value, list):
+        found: list[str] = []
+        for item in value:
+            found.extend(_obligation_urns_from_value(item))
+        return found
+    return []
+
+
+def _control_for_events(events: list[AgentEvent]) -> str:
+    event_types = {event.type for event in events}
+    if any(event_type.startswith("sandbox.") for event_type in event_types):
+        return "workflow_agent_step"
+    if any(event_type.startswith("policy.decision") for event_type in event_types):
+        return "workflow_findings_gate"
+    if any(event_type.startswith("hook.out") for event_type in event_types):
+        return "tool_permission"
+    if any(event_type.startswith("agent.") for event_type in event_types):
+        return "workflow_agent_step"
+    return "workflow_runtime"
+
+
+async def _obligation_by_urn(session: AsyncSession) -> dict[str, Obligation]:
+    result = await session.execute(select(Obligation))
+    return {row.urn: row for row in result.scalars().all()}
+
+
+async def _obligations_by_id(
+    session: AsyncSession,
+    evidence: list[EvidenceRecord],
+) -> dict[UUID, Obligation]:
+    ids = {row.obligation_id for row in evidence if row.obligation_id is not None}
+    if not ids:
+        return {}
+    result = await session.execute(select(Obligation).where(Obligation.id.in_(ids)))
+    return {row.id: row for row in result.scalars().all()}
+
+
+def _checkpoint_to_api(row: EvidenceCheckpoint) -> dict[str, Any]:
+    return {
+        "consumer": row.consumer,
+        "last_event_id": f"evt_{row.last_event_id.hex[:12]}" if row.last_event_id else None,
+        "last_event_ts": row.last_event_ts.isoformat() if row.last_event_ts else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _evidence_to_api(row: EvidenceRecord, obligations: dict[UUID, Obligation] | None = None) -> dict[str, Any]:
+    obligation = obligations.get(row.obligation_id) if obligations and row.obligation_id else None
+    obligation_urn = obligation.urn if obligation is not None else "urn:praetor:obligation:internal:data_min_3_2"
     return {
         "id": _external_id(row.urn, EVIDENCE_URN_PREFIX),
         "urn": row.urn,
-        "obligation_id": "urn:praetor:obligation:demo:internal-data-min",
+        "obligation_id": obligation_urn,
+        "obligation_ids": [obligation_urn],
         "control_id": row.control_id,
         "asset_id": ASSET_EXTERNAL_ID if row.asset_id else None,
         "workflow_run_id": _workflow_run_id(row.workflow_run_id),

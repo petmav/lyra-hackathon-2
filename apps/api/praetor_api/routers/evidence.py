@@ -18,7 +18,7 @@ router = APIRouter(tags=["evidence"])
 async def evidence_records() -> list[dict]:
     if get_settings().data_mode == "production":
         async with AsyncSessionLocal() as session:
-            await production_reviews.sweep_evidence_records(session)
+            await production_reviews.consume_evidence_events(session)
             return await production_reviews.list_evidence_records(session)
 
     ensure_demo_state()
@@ -32,14 +32,29 @@ async def evidence_records() -> list[dict]:
 async def sweep_evidence_records() -> dict:
     if get_settings().data_mode == "production":
         async with AsyncSessionLocal() as session:
-            created = await production_reviews.sweep_evidence_records(session)
-        return {"ok": True, "created": len(created)}
+            result = await production_reviews.consume_evidence_events(session)
+        return {"ok": True, "created": result["count"], "checkpoint": result["checkpoint"]}
 
     ensure_demo_state()
     before = len(EVIDENCE_RECORDS)
     if not EVIDENCE_RECORDS:
         generate_evidence()
     return {"ok": True, "created": len(EVIDENCE_RECORDS) - before}
+
+
+@router.post("/evidence-records:consume")
+@router.post("/evidence-records/consume")
+async def consume_evidence_records() -> dict:
+    if get_settings().data_mode == "production":
+        async with AsyncSessionLocal() as session:
+            result = await production_reviews.consume_evidence_events(session)
+        return {"ok": True, **result}
+
+    ensure_demo_state()
+    before = len(EVIDENCE_RECORDS)
+    if not EVIDENCE_RECORDS:
+        generate_evidence()
+    return {"ok": True, "created": len(EVIDENCE_RECORDS) - before, "count": len(EVIDENCE_RECORDS) - before}
 
 
 @router.post("/audit-packets:generate")

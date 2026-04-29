@@ -40,6 +40,20 @@ async def test_production_workflow_events_and_review_lifecycle() -> None:
     assert scan_step["outputs_redacted"]["model_call"]["mode"].startswith("sandbox_")
 
     async with AsyncSessionLocal() as session:
+        consumed = await production_reviews.consume_evidence_events(session, consumer="test-evidence-worker")
+        consumed_again = {"count": -1}
+        for _ in range(10):
+            consumed_again = await production_reviews.consume_evidence_events(session, consumer="test-evidence-worker")
+            if consumed_again["count"] == 0:
+                break
+        evidence = await production_reviews.list_evidence_records(session)
+
+    assert consumed["checkpoint"]["last_event_id"].startswith("evt_")
+    assert consumed_again["count"] == 0
+    assert any(row["workflow_run_id"] for row in evidence)
+    assert any(row["obligation_ids"] for row in evidence)
+
+    async with AsyncSessionLocal() as session:
         sandbox_count = await session.scalar(select(SandboxRun).where(SandboxRun.step_run_id.is_not(None)).limit(1))
         workflow_agent = await session.scalar(select(Asset).where(Asset.type == "workflow_agent").limit(1))
 
