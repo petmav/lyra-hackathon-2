@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from praetor_api.routers.alerts import router as alerts_router
 from praetor_api.routers.corpora import router as corpora_router
 from praetor_api.routers.evidence import router as evidence_router
 from praetor_api.routers.events import router as events_router
@@ -116,4 +117,5 @@ app.include_router(sandbox_router)
 app.include_router(evidence_router)
 app.include_router(models_router)
 app.include_router(inventory_router)
+app.include_router(alerts_router)
 app.include_router(stream_router)
