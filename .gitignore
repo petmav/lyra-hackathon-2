@@ -15,6 +15,7 @@ coverage/
 *.tsbuildinfo
 artifacts/
 **/artifacts/
+screenshots/
 
 # Local environment
 .env
