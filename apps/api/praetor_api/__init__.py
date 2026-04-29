@@ -1,0 +1,2 @@
+"""Praetor FastAPI gateway package."""
+
