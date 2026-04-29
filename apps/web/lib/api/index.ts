@@ -78,7 +78,7 @@ const API_BASE =
   typeof window === "undefined"
     ? (INTERNAL_BASE ?? PUBLIC_BASE)
     : PUBLIC_BASE;
-const DEV_BEARER = process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev";
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev";
 const USE_API = DATA_SOURCE === "api" || DATA_SOURCE === "hybrid";
 const USE_FIXTURES = DATA_SOURCE === "fixtures";
 const ALLOW_FIXTURE_FALLBACK = DATA_SOURCE === "hybrid";
@@ -90,7 +90,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     cache: "no-store",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${DEV_BEARER}`,
+      Authorization: `Bearer ${API_TOKEN}`,
       ...(init.headers ?? {})
     }
   });

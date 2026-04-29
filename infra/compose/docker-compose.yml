@@ -83,6 +83,7 @@ services:
       - ${PRAETOR_ENV_FILE:-.env.production.example}
     environment:
       PRAETOR_API_BASE: http://api:8000
+      PRAETOR_API_TOKEN: ${PRAETOR_API_TOKEN:-dev}
       DEV_BEARER: dev
       PRAETOR_WORKFLOW_WORKER_BATCH_SIZE: 4
       PRAETOR_WORKFLOW_WORKER_INTERVAL_SECONDS: 2
@@ -148,11 +149,13 @@ services:
       context: ../../apps/web
       args:
         NEXT_PUBLIC_API_BASE: http://localhost:8000
+        NEXT_PUBLIC_API_TOKEN: ${NEXT_PUBLIC_API_TOKEN:-dev}
         NEXT_PUBLIC_DEV_BEARER: dev
         NEXT_PUBLIC_DATA_SOURCE: ${NEXT_PUBLIC_DATA_SOURCE:-api}
         NEXT_PUBLIC_PRAETOR_DATA_MODE: ${NEXT_PUBLIC_PRAETOR_DATA_MODE:-production}
     environment:
       NEXT_PUBLIC_API_BASE: http://localhost:8000
+      NEXT_PUBLIC_API_TOKEN: ${NEXT_PUBLIC_API_TOKEN:-dev}
       NEXT_PUBLIC_DEV_BEARER: dev
       NEXT_PUBLIC_DATA_SOURCE: ${NEXT_PUBLIC_DATA_SOURCE:-api}
       NEXT_PUBLIC_PRAETOR_DATA_MODE: ${NEXT_PUBLIC_PRAETOR_DATA_MODE:-production}

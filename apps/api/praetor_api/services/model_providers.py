@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 import httpx
 
+from praetor_api.services.secrets import resolve_secret
 from praetor_api.settings import get_settings
 
 ProviderName = Literal["openai", "anthropic", "google"]
@@ -66,11 +67,19 @@ PROVIDERS: dict[str, ModelProvider] = {
 
 def provider_api_key(provider_id: str) -> str | None:
     settings = get_settings()
-    return {
+    env_value = {
         "openai": settings.openai_api_key,
         "anthropic": settings.anthropic_api_key,
         "google": settings.google_api_key,
     }.get(provider_id)
+    if env_value:
+        return env_value
+    auth_ref = {
+        "openai": settings.openai_api_key_ref,
+        "anthropic": settings.anthropic_api_key_ref,
+        "google": settings.google_api_key_ref,
+    }.get(provider_id)
+    return resolve_secret(auth_ref)
 
 
 def provider_configured(provider_id: str) -> bool:
@@ -221,7 +230,7 @@ async def stream_complete(
 
 
 async def _openai_complete(prompt: str, model: str, system: str | None) -> dict[str, Any]:
-    api_key = get_settings().openai_api_key
+    api_key = provider_api_key("openai")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
     payload: dict[str, Any] = {"model": model, "input": prompt}
@@ -245,7 +254,7 @@ async def _openai_complete(prompt: str, model: str, system: str | None) -> dict[
 
 
 async def _openai_stream_complete(prompt: str, model: str, system: str | None) -> AsyncIterator[dict[str, Any]]:
-    api_key = get_settings().openai_api_key
+    api_key = provider_api_key("openai")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
     payload: dict[str, Any] = {"model": model, "input": prompt, "stream": True}
@@ -276,7 +285,7 @@ async def _openai_stream_complete(prompt: str, model: str, system: str | None) -
 
 
 async def _anthropic_complete(prompt: str, model: str, system: str | None) -> dict[str, Any]:
-    api_key = get_settings().anthropic_api_key
+    api_key = provider_api_key("anthropic")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured")
     payload: dict[str, Any] = {
@@ -305,7 +314,7 @@ async def _anthropic_complete(prompt: str, model: str, system: str | None) -> di
 
 
 async def _anthropic_stream_complete(prompt: str, model: str, system: str | None) -> AsyncIterator[dict[str, Any]]:
-    api_key = get_settings().anthropic_api_key
+    api_key = provider_api_key("anthropic")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured")
     payload: dict[str, Any] = {
@@ -351,7 +360,7 @@ async def _anthropic_stream_complete(prompt: str, model: str, system: str | None
 
 
 async def _google_complete(prompt: str, model: str, system: str | None) -> dict[str, Any]:
-    api_key = get_settings().google_api_key
+    api_key = provider_api_key("google")
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY is not configured")
     payload: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
@@ -377,7 +386,7 @@ async def _google_complete(prompt: str, model: str, system: str | None) -> dict[
 
 
 async def _google_stream_complete(prompt: str, model: str, system: str | None) -> AsyncIterator[dict[str, Any]]:
-    api_key = get_settings().google_api_key
+    api_key = provider_api_key("google")
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY is not configured")
     payload: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}

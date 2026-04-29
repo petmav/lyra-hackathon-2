@@ -24,7 +24,7 @@ def _post_json(url: str, payload: dict, token: str) -> dict:
 
 def main() -> None:
     api_base = os.getenv("PRAETOR_API_BASE", "http://api:8000").rstrip("/")
-    token = os.getenv("DEV_BEARER", "dev")
+    token = os.getenv("PRAETOR_API_TOKEN") or os.getenv("DEV_BEARER", "dev")
     interval = float(os.getenv("PRAETOR_WORKFLOW_WORKER_INTERVAL_SECONDS", "2"))
     batch_size = int(os.getenv("PRAETOR_WORKFLOW_WORKER_BATCH_SIZE", "4"))
     lease_seconds = int(os.getenv("PRAETOR_WORKFLOW_STEP_LEASE_SECONDS", "300"))

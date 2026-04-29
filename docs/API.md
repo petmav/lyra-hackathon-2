@@ -1,6 +1,7 @@
 # Praetor API Surface
 
-All endpoints require `Authorization: Bearer dev` in local demo mode.
+All endpoints require `Authorization: Bearer dev` in local demo mode. Production can set
+`PRAETOR_AUTH_MODE=jwt` to require signed JWTs with role-based read/write checks.
 
 ## Model Providers
 
@@ -232,6 +233,8 @@ Modes:
 
 - `demo` uses in-memory deterministic services for hackathon flows.
 - `production` selects the Postgres data backend configuration. Production route migration is tracked in `docs/PHASE_STATUS.md`.
+- `PRAETOR_AUTH_MODE=dev_bearer` keeps demo bearer auth; `PRAETOR_AUTH_MODE=jwt` enables HS256 JWT verification with viewer/operator/admin RBAC.
+- `PRAETOR_SECRET_BACKEND=env|vault|env_then_vault|vault_then_env` controls how model/API/hook `secret:` references resolve.
 - `PRAETOR_SEED_DEMO_DATA=0` keeps production routes from auto-creating demo findings/proposals/evidence on read.
 - `PRAETOR_SEED_DEMO_DATA=1` is only for explicit demo seeding and local demo flows.
 - `PRAETOR_AUTO_MIGRATE=1` runs `alembic upgrade head` during production API startup. This is the Docker/default path for fresh Postgres volumes.

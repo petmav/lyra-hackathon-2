@@ -15,6 +15,7 @@ from praetor_api.routers.policy import router as policy_router
 from praetor_api.routers.proposed_changes import router as proposed_changes_router
 from praetor_api.routers.sandbox import router as sandbox_router
 from praetor_api.routers.workflows import router as workflows_router
+from praetor_api.services.auth import authorize_request
 from praetor_api.services.readiness import runtime_readiness
 from praetor_api.settings import get_settings
 from praetor_api.ws.streams import router as stream_router
@@ -47,20 +48,24 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 @app.middleware("http")
-async def require_dev_bearer(request: Request, call_next):
+async def require_api_auth(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    authorization = request.headers.get("authorization", "")
-    expected = f"Bearer {settings.dev_bearer}"
-    if authorization != expected:
+    auth = authorize_request(request)
+    if not auth.ok:
         return JSONResponse(
-            status_code=401,
-            content={"detail": "missing or invalid bearer token"},
+            status_code=auth.status_code,
+            content={"detail": auth.detail},
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return await call_next(request)
+    response = await call_next(request)
+    if auth.subject:
+        response.headers["X-Praetor-Subject"] = auth.subject
+    if auth.roles:
+        response.headers["X-Praetor-Roles"] = ",".join(auth.roles)
+    return response
 
 
 @app.middleware("http")
@@ -90,6 +95,8 @@ async def runtime_config() -> dict[str, str | bool]:
         "default_model_name": settings.default_model_name,
         "agent_model_mode": settings.agent_model_mode,
         "workflow_execution_mode": settings.workflow_execution_mode,
+        "auth_mode": settings.auth_mode,
+        "secret_backend": settings.secret_backend,
     }
 
 

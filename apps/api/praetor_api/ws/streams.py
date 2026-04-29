@@ -7,16 +7,14 @@ from praetor_api.services.event_stream import (
     stream_demo_events,
     stream_redis_events,
 )
+from praetor_api.services.auth import authorize_websocket
 from praetor_api.settings import get_settings
 
 router = APIRouter()
 
 
 async def _authorize(websocket: WebSocket) -> bool:
-    settings = get_settings()
-    token = websocket.query_params.get("token")
-    authorization = websocket.headers.get("authorization", "")
-    return token == settings.dev_bearer or authorization == f"Bearer {settings.dev_bearer}"
+    return authorize_websocket(websocket).ok
 
 
 def _stream(

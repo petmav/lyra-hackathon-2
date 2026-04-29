@@ -46,6 +46,7 @@ const sharedEnv = {
   NEXT_PUBLIC_DATA_SOURCE: process.env.NEXT_PUBLIC_DATA_SOURCE ?? (mode === "demo" ? "fixtures" : "api"),
   NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000",
   NEXT_PUBLIC_DEV_BEARER: process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev",
+  NEXT_PUBLIC_API_TOKEN: process.env.NEXT_PUBLIC_API_TOKEN ?? process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev",
 };
 
 const children = [];

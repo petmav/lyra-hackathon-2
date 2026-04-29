@@ -21,7 +21,7 @@ type StreamTopic =
   | { kind: "workflowRun"; id: string };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "");
-const DEV_BEARER = process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev";
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev";
 const MOCK_STREAMS = process.env.NEXT_PUBLIC_MOCK_STREAMS === "1";
 
 function websocketUrl(topic: StreamTopic): string | null {
@@ -31,7 +31,7 @@ function websocketUrl(topic: StreamTopic): string | null {
     topic.kind === "asset"
       ? `/ws/v1/assets/${encodeURIComponent(topic.id)}/stream`
       : `/ws/v1/workflow-runs/${encodeURIComponent(topic.id)}/stream`;
-  return `${base}${path}?token=${encodeURIComponent(DEV_BEARER)}`;
+  return `${base}${path}?token=${encodeURIComponent(API_TOKEN)}`;
 }
 
 /** A small curated tape of "future" events used to keep the stream alive. */

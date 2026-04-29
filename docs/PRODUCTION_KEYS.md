@@ -2,6 +2,23 @@
 
 Praetor production mode is intentionally empty of demo records. To make agent workflows and external hooks live, fill the env vars in `infra/compose/.env.production.example`, then start the stack with `docker compose -f infra/compose/docker-compose.yml up -d --build`.
 
+## API Auth
+
+Local demo mode uses `PRAETOR_AUTH_MODE=dev_bearer` with `DEV_BEARER=dev`.
+
+For production-style auth, set:
+
+```bash
+PRAETOR_AUTH_MODE=jwt
+PRAETOR_JWT_SECRET=<shared-hs256-secret>
+PRAETOR_JWT_ISSUER=<optional-issuer>
+PRAETOR_JWT_AUDIENCE=<optional-audience>
+PRAETOR_API_TOKEN=<worker-or-service-token>
+NEXT_PUBLIC_API_TOKEN=<browser-token-for-local-demo-only>
+```
+
+JWT roles can come from `roles`, `role`, `groups`, `scope`, or `scp`. Read routes require `viewer` by default; write routes require `operator`; `admin` satisfies both.
+
 ## Agent Model Providers
 
 - `OPENAI_API_KEY` enables `provider=openai`.
@@ -38,6 +55,20 @@ curl -N -X POST http://localhost:8000/models:stream \
 ```
 
 Praetor normalizes OpenAI Responses API, Anthropic Messages API, and Gemini `streamGenerateContent` chunks into the same SSE event contract, so UI/runtime code does not branch on provider-specific wire formats.
+
+## Secret Backend
+
+Environment variables remain the default local backend. To resolve `secret:` references from Vault KV v2 instead, set:
+
+```bash
+PRAETOR_SECRET_BACKEND=vault
+VAULT_ADDR=http://vault:8200
+VAULT_TOKEN=<vault-token>
+VAULT_KV_MOUNT=secret
+PRAETOR_VAULT_PATH_PREFIX=praetor
+```
+
+`secret:github_token` resolves from `secret/data/praetor/github_token` by default. The returned KV data can use `value`, `token`, `api_key`, `secret`, or the mapped env key such as `GITHUB_TOKEN`.
 
 ## JSON Stack Integration Secrets
 
