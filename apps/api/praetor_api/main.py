@@ -30,6 +30,19 @@ app = FastAPI(
     description="Control plane API for governed agentic GRC workflows.",
 )
 
+
+@app.on_event("startup")
+async def _seed_demo_state() -> None:
+    if settings.data_mode != "demo":
+        return
+    from praetor_api.services.demo_seed import seed_all
+
+    try:
+        await seed_all()
+    except Exception:
+        logger.exception("demo seed failed; continuing without seed data")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.web_origin, "http://localhost:3000"],

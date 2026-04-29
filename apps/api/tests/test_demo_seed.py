@@ -84,6 +84,22 @@ async def test_seeded_step_events_carry_workflow_step_id() -> None:
             )
 
 
+def test_main_app_seeds_demo_state_on_startup() -> None:
+    """Booting the FastAPI app in demo mode must populate RUNS via the
+    startup hook so the dashboard isn't empty."""
+    from fastapi.testclient import TestClient
+
+    from praetor_api.main import app
+    from praetor_api.services import demo_workflows
+
+    demo_workflows.RUNS.clear()
+    reset_events()
+
+    with TestClient(app) as _client:
+        # entering the context fires startup hooks
+        assert demo_workflows.RUNS, "startup did not populate demo runs"
+
+
 @pytest.mark.asyncio
 async def test_seed_event_hash_chain_is_valid_per_asset() -> None:
     await demo_seed.seed_all()
