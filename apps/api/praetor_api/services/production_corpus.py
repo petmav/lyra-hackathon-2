@@ -18,6 +18,39 @@ CORPUS_URN_PREFIX = "urn:praetor:corpus:"
 DOCUMENT_URN_PREFIX = "urn:praetor:document:"
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
+CORPUS_KINDS = {
+    "regulation",
+    "standard",
+    "internal_policy",
+    "code_repo",
+    "process_artefact",
+    "evidence_reference",
+}
+
+ARTIFACT_ROOT = Path("artifacts/corpora")
+
+
+def _slugify(value: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in value)
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-") or "corpus"
+
+
+def _extract_text(filename: str, media_type: str | None, binary: bytes) -> str:
+    """Best-effort text extraction. Decode UTF-8 for text-like files, return
+    empty text for binary documents (PDFs, etc.) — the binary is still stored
+    so the workflow runtime can mount it into the sandbox."""
+    lower = filename.lower()
+    if (media_type and media_type.startswith("text/")) or any(
+        lower.endswith(ext) for ext in (".txt", ".md", ".markdown", ".csv", ".json", ".yaml", ".yml")
+    ):
+        try:
+            return binary.decode("utf-8")
+        except UnicodeDecodeError:
+            return binary.decode("utf-8", errors="replace")
+    return ""
+
 
 def _corpus_urn(corpus_id: str) -> str:
     return f"{CORPUS_URN_PREFIX}{corpus_id}"
@@ -69,7 +102,13 @@ async def ensure_corpora(session: AsyncSession) -> list[Corpus]:
 
 
 async def list_corpora(session: AsyncSession) -> list[dict[str, Any]]:
-    corpora = await seed_corpora(session)
+    seeded = await seed_corpora(session)
+    seeded_urns = {row.urn for row in seeded}
+    extra_result = await session.execute(
+        select(Corpus).where(Corpus.urn.notin_(seeded_urns)).order_by(Corpus.created_at)
+    )
+    extras = list(extra_result.scalars().all())
+    corpora = [*seeded, *extras]
     for corpus in corpora:
         corpus.document_count = await _document_count(session, corpus.id)
     await session.commit()
@@ -260,16 +299,115 @@ async def _document_count(session: AsyncSession, corpus_id: UUID) -> int:
 def _corpus_to_api(corpus: Corpus) -> dict[str, Any]:
     corpus_id = _external_id(corpus.urn, CORPUS_URN_PREFIX)
     fixture = CORPORA.get(corpus_id, {})
+    description = corpus.description or fixture.get("description") or f"{corpus.name} corpus for governed retrieval."
     return {
         "id": corpus_id,
         "urn": corpus.urn,
         "name": corpus.name,
-        "description": fixture.get("description", f"{corpus.name} corpus for governed retrieval."),
+        "description": description,
         "kind": corpus.kind,
+        "framework": corpus.framework,
+        "jurisdiction": corpus.jurisdiction,
+        "retention": corpus.retention,
+        "source_url": corpus.source_url,
         "version": "2026.04",
         "document_count": corpus.document_count,
         "indexed_at": corpus.indexed_at.isoformat() if corpus.indexed_at else None,
     }
+
+
+async def create_corpus(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    kind = str(payload.get("kind") or "internal_policy")
+    if kind not in CORPUS_KINDS:
+        raise ValueError(f"kind must be one of {sorted(CORPUS_KINDS)}")
+    explicit_id = payload.get("id")
+    corpus_id = _slugify(str(explicit_id)) if explicit_id else _slugify(name)
+    urn = _corpus_urn(corpus_id)
+    existing = await session.execute(select(Corpus).where(Corpus.urn == urn))
+    if existing.scalar_one_or_none() is not None:
+        raise ValueError(f"corpus '{corpus_id}' already exists")
+    corpus = Corpus(
+        urn=urn,
+        name=name,
+        kind=kind,
+        description=str(payload.get("description") or "").strip() or None,
+        framework=(payload.get("framework") or None) and str(payload["framework"]),
+        jurisdiction=(payload.get("jurisdiction") or None) and str(payload["jurisdiction"]),
+        retention=(payload.get("retention") or None) and str(payload["retention"]),
+        source_url=(payload.get("source_url") or None) and str(payload["source_url"]),
+        document_count=0,
+        indexed_at=None,
+    )
+    session.add(corpus)
+    await session.commit()
+    await session.refresh(corpus)
+    return _corpus_to_api(corpus)
+
+
+async def delete_corpus(session: AsyncSession, corpus_id: str) -> bool:
+    corpus = await _find_corpus(session, corpus_id)
+    if corpus is None:
+        return False
+    docs_result = await session.execute(select(Document.id).where(Document.corpus_id == corpus.id))
+    document_ids = [row for row in docs_result.scalars().all()]
+    if document_ids:
+        await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id.in_(document_ids)))
+        await session.execute(delete(Document).where(Document.id.in_(document_ids)))
+    await session.delete(corpus)
+    await session.commit()
+    return True
+
+
+async def upload_document(
+    session: AsyncSession,
+    corpus_id: str,
+    *,
+    filename: str,
+    media_type: str | None,
+    binary: bytes,
+) -> dict[str, Any]:
+    corpus = await _find_corpus(session, corpus_id)
+    if corpus is None:
+        raise KeyError(corpus_id)
+    external_id = _external_id(corpus.urn, CORPUS_URN_PREFIX)
+    document_id = f"doc_{uuid4().hex[:12]}"
+    storage_dir = ARTIFACT_ROOT / external_id
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(filename).suffix or ""
+    binary_path = storage_dir / f"{document_id}{suffix}"
+    binary_path.write_bytes(binary)
+    text = _extract_text(filename, media_type, binary)
+    digest = _hash_text(f"upload://{filename}\n{len(binary)}\n{text}")
+    document = Document(
+        urn=_document_urn(document_id),
+        corpus_id=corpus.id,
+        source_uri=f"upload://{filename}",
+        content_hash=digest,
+        title=Path(filename).stem.replace("_", " ") or filename,
+        citation=None,
+        framework=corpus.framework or corpus.kind,
+        jurisdiction=corpus.jurisdiction,
+        sector=None,
+        text_path=str(binary_path.as_posix()),
+        binary_path=str(binary_path.as_posix()),
+        media_type=media_type or "application/octet-stream",
+        size_bytes=len(binary),
+        parsed_structure={"text": text, "filename": filename},
+    )
+    session.add(document)
+    await session.flush()
+    chunks = _chunk_text(document.id, text) if text.strip() else []
+    if chunks:
+        session.add_all(chunks)
+    corpus.document_count = await _document_count(session, corpus.id)
+    corpus.indexed_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(document)
+    chunk_count = len(chunks)
+    return _document_to_api(document, external_id, chunk_count)
 
 
 def _document_to_api(document: Document, corpus_id: str, chunk_count: int) -> dict[str, Any]:
@@ -284,6 +422,9 @@ def _document_to_api(document: Document, corpus_id: str, chunk_count: int) -> di
         "jurisdiction": document.jurisdiction,
         "sector": document.sector,
         "text_path": document.text_path,
+        "binary_path": document.binary_path,
+        "media_type": document.media_type,
+        "size_bytes": document.size_bytes,
         "parsed_structure": document.parsed_structure,
         "chunk_count": chunk_count,
     }

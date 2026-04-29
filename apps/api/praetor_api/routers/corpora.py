@@ -1,8 +1,17 @@
-from fastapi import APIRouter, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from praetor_api.db import AsyncSessionLocal
-from praetor_api.services.corpus_index import CORPORA, ingest_document, search
+from praetor_api.services.corpus_index import (
+    CORPORA,
+    create_demo_corpus,
+    delete_demo_corpus,
+    ingest_document,
+    search,
+    upload_demo_document,
+)
 from praetor_api.services import production_corpus
 from praetor_api.settings import get_settings
 
@@ -18,6 +27,17 @@ class IngestDocumentRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     k: int = Field(default=8, ge=1, le=50)
+
+
+class CorpusCreateRequest(BaseModel):
+    name: str
+    kind: str = "internal_policy"
+    description: str | None = None
+    framework: str | None = None
+    jurisdiction: str | None = None
+    retention: str | None = None
+    source_url: str | None = None
+    id: str | None = None
 
 
 @router.get("/corpora")
@@ -95,9 +115,64 @@ def _demo_corpus_to_api(corpus_id: str, row: dict) -> dict:
         "id": corpus_id,
         "urn": f"urn:praetor:corpus:{corpus_id}",
         "name": row["name"],
-        "description": row.get("description", f"{row['name']} corpus for governed retrieval."),
+        "description": row.get("description") or f"{row['name']} corpus for governed retrieval.",
         "kind": row["kind"],
+        "framework": row.get("framework"),
+        "jurisdiction": row.get("jurisdiction"),
+        "retention": row.get("retention"),
+        "source_url": row.get("source_url"),
         "version": row.get("version", "2026.04"),
         "document_count": row.get("document_count", 0),
         "indexed_at": row.get("indexed_at"),
     }
+
+
+@router.post("/corpora", status_code=201)
+async def create_corpus(request: CorpusCreateRequest) -> dict:
+    payload = request.model_dump(exclude_none=True)
+    try:
+        if get_settings().data_mode == "production":
+            async with AsyncSessionLocal() as session:
+                return await production_corpus.create_corpus(session, payload)
+        record = create_demo_corpus(payload)
+        return _demo_corpus_to_api(record["id"], record)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.delete("/corpora/{corpus_id}", status_code=204)
+async def delete_corpus(corpus_id: str) -> None:
+    if get_settings().data_mode == "production":
+        async with AsyncSessionLocal() as session:
+            ok = await production_corpus.delete_corpus(session, corpus_id)
+    else:
+        ok = delete_demo_corpus(corpus_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="corpus not found")
+    return None
+
+
+@router.post("/corpora/{corpus_id}/documents:upload")
+@router.post("/corpora/{corpus_id}/documents/upload")
+async def upload_document(corpus_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    binary = await file.read()
+    if not binary:
+        raise HTTPException(status_code=422, detail="uploaded file is empty")
+    try:
+        if get_settings().data_mode == "production":
+            async with AsyncSessionLocal() as session:
+                return await production_corpus.upload_document(
+                    session,
+                    corpus_id,
+                    filename=file.filename or "uploaded",
+                    media_type=file.content_type,
+                    binary=binary,
+                )
+        return upload_demo_document(
+            corpus_id,
+            filename=file.filename or "uploaded",
+            media_type=file.content_type,
+            binary=binary,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="corpus not found") from None

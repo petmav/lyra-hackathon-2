@@ -96,6 +96,82 @@ def ingest_document(corpus_id: str, title: str, source_uri: str, text: str) -> d
     return serialize_document(document)
 
 
+def upload_demo_document(
+    corpus_id: str,
+    *,
+    filename: str,
+    media_type: str | None,
+    binary: bytes,
+) -> dict[str, Any]:
+    if corpus_id not in CORPORA:
+        raise KeyError(corpus_id)
+    text = ""
+    lower = filename.lower()
+    if (media_type and media_type.startswith("text/")) or any(
+        lower.endswith(ext) for ext in (".txt", ".md", ".markdown", ".csv", ".json", ".yaml", ".yml")
+    ):
+        try:
+            text = binary.decode("utf-8")
+        except UnicodeDecodeError:
+            text = binary.decode("utf-8", errors="replace")
+    title_stem = filename.rsplit(".", 1)[0].replace("_", " ") or filename
+    document = Document(
+        id=f"doc_{uuid4().hex[:12]}",
+        corpus_id=corpus_id,
+        title=title_stem,
+        source_uri=f"upload://{filename}",
+        text=text,
+    )
+    document.chunks = chunk_markdown(document.id, text) if text.strip() else []
+    DOCUMENTS[document.id] = document
+    CORPORA[corpus_id]["document_count"] = sum(
+        1 for candidate in DOCUMENTS.values() if candidate.corpus_id == corpus_id
+    )
+    record = serialize_document(document)
+    record["media_type"] = media_type or "application/octet-stream"
+    record["size_bytes"] = len(binary)
+    return record
+
+
+def create_demo_corpus(payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    kind = str(payload.get("kind") or "internal_policy")
+    explicit = payload.get("id")
+    base_id = str(explicit).strip() if explicit else name
+    cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in base_id)
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    corpus_id = cleaned.strip("-") or "corpus"
+    if corpus_id in CORPORA:
+        raise ValueError(f"corpus '{corpus_id}' already exists")
+    record = {
+        "id": corpus_id,
+        "name": name,
+        "kind": kind,
+        "description": str(payload.get("description") or "").strip() or None,
+        "framework": payload.get("framework"),
+        "jurisdiction": payload.get("jurisdiction"),
+        "retention": payload.get("retention"),
+        "source_url": payload.get("source_url"),
+        "version": "2026.04",
+        "document_count": 0,
+        "indexed_at": None,
+    }
+    CORPORA[corpus_id] = record
+    return record
+
+
+def delete_demo_corpus(corpus_id: str) -> bool:
+    if corpus_id not in CORPORA:
+        return False
+    del CORPORA[corpus_id]
+    for doc_id in [d.id for d in DOCUMENTS.values() if d.corpus_id == corpus_id]:
+        DOCUMENTS.pop(doc_id, None)
+    return True
+
+
 def search(corpus_id: str, query: str, k: int = 8) -> list[dict[str, Any]]:
     terms = {term.lower() for term in query.split() if term.strip()}
     chunks = [

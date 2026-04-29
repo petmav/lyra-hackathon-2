@@ -12,6 +12,7 @@ import { Urn } from "@/components/data/Urn";
 import { Timestamp } from "@/components/data/Timestamp";
 import { Hash } from "@/components/data/Hash";
 import { CorpusSearch } from "@/components/corpus-search/CorpusSearch";
+import { DocumentUploader } from "@/components/corpus-search/DocumentUploader";
 
 /**
  * Corpus detail — list of documents in the corpus + a scoped search box.
@@ -22,14 +23,22 @@ export default function CorpusPage({ params }: { params: Promise<{ id: string }>
   const [docs, setDocs] = useState<PraetorDocument[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const reload = async () => {
+    const [c, d] = await Promise.all([api.corpora.get(id), api.corpora.documents(id)]);
+    setCorpus(c);
+    setDocs(d);
+    setLoading(false);
+  };
+
   useEffect(() => {
     let alive = true;
-    Promise.all([api.corpora.get(id), api.corpora.documents(id)]).then(([c, d]) => {
+    void (async () => {
+      const [c, d] = await Promise.all([api.corpora.get(id), api.corpora.documents(id)]);
       if (!alive) return;
       setCorpus(c);
       setDocs(d);
       setLoading(false);
-    });
+    })();
     return () => { alive = false; };
   }, [id]);
 
@@ -54,8 +63,17 @@ export default function CorpusPage({ params }: { params: Promise<{ id: string }>
         }
       />
 
+      <div className="mt-6">
+        <DocumentUploader corpusId={corpus.id} onUploaded={() => void reload()} />
+      </div>
+
       <Section number="α" eyebrow="Documents" title="Indexed">
         <ul className="border border-rule">
+          {docs.length === 0 && (
+            <li className="px-4 py-6 text-center text-[12px] text-paper-fade">
+              No documents in this corpus yet — upload one above.
+            </li>
+          )}
           {docs.map((d, i) => (
             <li key={d.id} className={`grid gap-4 px-4 py-3 md:grid-cols-[1.4fr_1fr_120px] ${i < docs.length - 1 ? "border-b border-rule" : ""}`}>
               <div>
