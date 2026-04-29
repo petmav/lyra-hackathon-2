@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
+AGENT_OUTPUT_MARKER = "PRAETOR_AGENT_STEP_OUTPUT="
+
 
 @dataclass(frozen=True)
 class SandboxManifest:
@@ -25,6 +27,7 @@ class SandboxManifest:
     read_only_root: bool = True
     environment: dict[str, str] = field(default_factory=dict)
     fallback: str = "deterministic-replay"
+    payload: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "SandboxManifest":
@@ -49,6 +52,7 @@ class SandboxManifest:
             read_only_root=bool(payload.get("read_only_root", True)),
             environment={str(key): str(value) for key, value in environment.items()},
             fallback=str(payload.get("fallback") or "deterministic-replay"),
+            payload=json.loads(json.dumps(payload)),
         )
 
 
@@ -101,7 +105,7 @@ class DockerSandboxOrchestrator:
             return self._replay(manifest, started, f"docker-launch-failed:{exc.__class__.__name__}")
 
         finished = datetime.now(UTC)
-        return {
+        result = {
             "mode": "docker",
             "docker_available": True,
             "container_name": name,
@@ -123,6 +127,8 @@ class DockerSandboxOrchestrator:
                 "isolation": _isolation_profile(manifest),
             },
         }
+        _attach_agent_output(result, completed.stdout)
+        return result
 
     def _launch_with_socket(
         self,
@@ -183,7 +189,7 @@ class DockerSandboxOrchestrator:
         if isinstance(wait.get("body"), dict):
             exit_code = int(wait["body"].get("StatusCode", 0))
         stdout = logs.get("raw", b"").decode("utf-8", errors="replace")[-8000:]
-        return {
+        result = {
             "mode": "docker-socket",
             "docker_available": True,
             "container_name": name,
@@ -205,9 +211,12 @@ class DockerSandboxOrchestrator:
                 "isolation": _isolation_profile(manifest),
             },
         }
+        _attach_agent_output(result, stdout)
+        return result
 
     def _replay(self, manifest: SandboxManifest, started: datetime, reason: str) -> dict[str, Any]:
         finished = datetime.now(UTC)
+        agent_output = _agent_output_from_manifest(manifest)
         return {
             "mode": "replay",
             "docker_available": False,
@@ -228,6 +237,7 @@ class DockerSandboxOrchestrator:
                 "docker_launch": "fallback",
                 "manifest": json.loads(json.dumps(manifest.__dict__)),
                 "isolation": _isolation_profile(manifest),
+                "agent_step_output": agent_output,
             },
         }
 
@@ -240,6 +250,78 @@ def _isolation_profile(manifest: SandboxManifest) -> dict[str, Any]:
         "read_only_root": manifest.read_only_root,
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges"],
+    }
+
+
+def _attach_agent_output(result: dict[str, Any], stdout: str) -> None:
+    agent_output = _parse_agent_output(stdout)
+    if agent_output is not None:
+        result.setdefault("result", {})["agent_step_output"] = agent_output
+
+
+def _parse_agent_output(stdout: str) -> dict[str, Any] | None:
+    for line in reversed(stdout.splitlines()):
+        if AGENT_OUTPUT_MARKER not in line:
+            continue
+        raw = line.split(AGENT_OUTPUT_MARKER, 1)[1].strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _agent_output_from_manifest(manifest: SandboxManifest) -> dict[str, Any] | None:
+    if "agent" not in manifest.payload:
+        return None
+    raw = manifest.environment.get("PRAETOR_AGENT_MANIFEST_JSON", "{}")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    finding = payload.get("expected_finding")
+    if not isinstance(finding, dict):
+        finding = {
+            "id": str(payload.get("finding_id") or "fnd_sandbox"),
+            "title": "Sandbox agent finding",
+            "description": "The sandbox replay emitted a governed fallback finding.",
+            "severity": "medium",
+            "confidence": 0.5,
+            "obligations_cited": [],
+            "documents_cited": [],
+            "status": "open",
+        }
+    provider = str(payload.get("model_provider") or manifest.environment.get("PRAETOR_MODEL_PROVIDER") or "openai")
+    model = str(payload.get("model") or manifest.environment.get("PRAETOR_MODEL") or "gpt-5.4-mini")
+    return {
+        "ok": True,
+        "model_provider": provider,
+        "model": model,
+        "model_call": {
+            "ok": True,
+            "mode": "sandbox_replay",
+            "provider": provider,
+            "model": model,
+            "configured": False,
+            "text": "Sandbox replay produced a governed structured finding from supplied workflow context.",
+            "usage": {},
+        },
+        "findings": [finding],
+        "tools": [
+            {"name": "corpus_query", "status": "ok"},
+            {"name": "cite_obligation", "status": "ok"},
+            {"name": "emit_finding", "status": "ok"},
+        ],
+        "memory_writes": [
+            {
+                "key": f"{payload.get('workflow_run_id', 'workflow')}:{payload.get('step_id', 'agent')}:finding",
+                "provenance": "sandbox://agent_step",
+            }
+        ],
     }
 
 

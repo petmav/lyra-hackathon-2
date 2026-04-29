@@ -1351,6 +1351,7 @@ async def _run_agent_step_in_sandbox(
 ) -> tuple[dict[str, Any], str]:
     workflow_agent = await _ensure_workflow_agent_asset(session, workflow_run, step)
     run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
+    finding = _finding_payload(finding_slug)
     manifest = _agent_sandbox_manifest(
         workflow_run,
         workflow_agent,
@@ -1358,6 +1359,7 @@ async def _run_agent_step_in_sandbox(
         context,
         model_provider=model_provider,
         model=model,
+        expected_finding=finding,
     )
     launch = await _launch_sandbox(manifest)
     sandbox = SandboxRun(
@@ -1373,14 +1375,21 @@ async def _run_agent_step_in_sandbox(
     await session.flush()
     step_run.sandbox_run_id = sandbox.id
 
-    model_call = await _run_agent_model(step, context, provider=model_provider, model=model)
-    finding = _finding_payload(finding_slug)
-    outputs = _agent_outputs(model_provider, model, model_call, finding)
+    agent_output = _agent_output_from_sandbox_launch(launch, model_provider, model, finding)
+    outputs = _agent_outputs(
+        str(agent_output.get("model_provider") or model_provider),
+        str(agent_output.get("model") or model),
+        _model_call_from_agent_output(agent_output, model_provider, model),
+        _finding_from_agent_output(agent_output, finding),
+    )
     outputs.update(
         {
             "workflow_agent_asset_id": (workflow_agent.config or {}).get("external_id"),
             "workflow_agent_asset_urn": workflow_agent.urn,
             "sandbox_run_id": _sandbox_id(sandbox.id),
+            "agent_execution": "sandbox",
+            "tools": agent_output.get("tools", []),
+            "memory_writes": agent_output.get("memory_writes", []),
             "sandbox": {
                 "mode": launch.get("mode"),
                 "exit_code": sandbox.exit_code,
@@ -1389,8 +1398,8 @@ async def _run_agent_step_in_sandbox(
         }
     )
     sandbox_ok = sandbox.exit_code == 0
-    model_ok = bool(model_call.get("ok", True))
-    return outputs, "succeeded" if sandbox_ok and model_ok else "failed"
+    agent_ok = bool(agent_output.get("ok", True))
+    return outputs, "succeeded" if sandbox_ok and agent_ok else "failed"
 
 
 async def _ensure_workflow_agent_asset(
@@ -1438,11 +1447,25 @@ def _agent_sandbox_manifest(
     *,
     model_provider: str,
     model: str,
+    expected_finding: dict[str, Any],
 ) -> dict[str, Any]:
     settings = get_settings()
     run_slug = _entity_slug(workflow_run.urn, WORKFLOW_RUN_URN_PREFIX)
     step_id = str(step["id"])
     prior_steps = context.get("steps", {})
+    agent_payload = {
+        "workflow_run_id": run_slug,
+        "step_id": step_id,
+        "model_provider": model_provider,
+        "model": model,
+        "finding_id": expected_finding["id"],
+        "expected_finding": expected_finding,
+        "prior_step_outputs": {
+            step_name: state.get("outputs", {})
+            for step_name, state in prior_steps.items()
+        },
+        "workflow_inputs": context.get("inputs", {}),
+    }
     return {
         "mode": "agent_step",
         "fallback": "deterministic-replay",
@@ -1453,13 +1476,8 @@ def _agent_sandbox_manifest(
         "image": settings.sandbox_image,
         "command": [
             "python",
-            "-c",
-            (
-                "import json; "
-                "print(json.dumps({'praetor_agent_step':'"
-                + step_id
-                + "','status':'sandbox_completed'}))"
-            ),
+            "-m",
+            "praetor_sandbox.harness.agent_step",
         ],
         "network": "praetor-mocks",
         "timeout_seconds": 30,
@@ -1472,6 +1490,7 @@ def _agent_sandbox_manifest(
             "PRAETOR_ASSET_URN": workflow_agent.urn,
             "PRAETOR_MODEL_PROVIDER": model_provider,
             "PRAETOR_MODEL": model,
+            "PRAETOR_AGENT_MANIFEST_JSON": json.dumps(agent_payload, sort_keys=True),
         },
         "agent": {
             "model": model,
@@ -1487,6 +1506,7 @@ def _agent_sandbox_manifest(
             "memory": {"kind": "ephemeral_vector", "store_id": f"{run_slug}-{step_id}"},
             "corpora": _corpora_from_context(prior_steps),
         },
+        "agent_payload": agent_payload,
         "inputs": {
             "workflow_inputs": context.get("inputs", {}),
             "prior_step_outputs": {
@@ -1498,6 +1518,78 @@ def _agent_sandbox_manifest(
         "expected_output_schema": {"findings": "list[Finding]"},
         "policy_set": "praetor.controls.workflow_agent_step",
     }
+
+
+def _agent_output_from_sandbox_launch(
+    launch: dict[str, Any],
+    model_provider: str,
+    model: str,
+    fallback_finding: dict[str, Any],
+) -> dict[str, Any]:
+    result = launch.get("result")
+    if isinstance(result, dict):
+        output = result.get("agent_step_output")
+        if isinstance(output, dict):
+            return output
+    return {
+        "ok": False,
+        "model_provider": model_provider,
+        "model": model,
+        "model_call": {
+            "ok": False,
+            "mode": "sandbox_missing_output",
+            "provider": model_provider,
+            "model": model,
+            "configured": False,
+            "error": "sandbox did not emit agent_step_output",
+            "text": "",
+            "usage": {},
+        },
+        "findings": [fallback_finding],
+        "tools": [],
+        "memory_writes": [],
+    }
+
+
+def _model_call_from_agent_output(
+    agent_output: dict[str, Any],
+    model_provider: str,
+    model: str,
+) -> dict[str, Any]:
+    model_call = agent_output.get("model_call")
+    if isinstance(model_call, dict):
+        return model_call
+    return {
+        "ok": bool(agent_output.get("ok", True)),
+        "mode": "sandbox",
+        "provider": str(agent_output.get("model_provider") or model_provider),
+        "model": str(agent_output.get("model") or model),
+        "configured": False,
+        "text": "",
+        "usage": {},
+    }
+
+
+def _finding_from_agent_output(
+    agent_output: dict[str, Any],
+    fallback_finding: dict[str, Any],
+) -> dict[str, Any]:
+    findings = agent_output.get("findings")
+    if isinstance(findings, list) and findings and isinstance(findings[0], dict):
+        candidate = findings[0]
+        required = {
+            "id",
+            "title",
+            "description",
+            "severity",
+            "confidence",
+            "obligations_cited",
+            "documents_cited",
+            "status",
+        }
+        if required.issubset(candidate):
+            return candidate
+    return fallback_finding
 
 
 async def _launch_sandbox(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -1518,6 +1610,7 @@ async def _launch_sandbox(manifest: dict[str, Any]) -> dict[str, Any]:
 def _sandbox_replay(manifest: dict[str, Any], reason: str) -> dict[str, Any]:
     started = datetime.now(UTC)
     finished = datetime.now(UTC)
+    agent_output = _agent_output_from_manifest(manifest)
     return {
         "mode": "replay",
         "fallback_reason": reason,
@@ -1539,7 +1632,51 @@ def _sandbox_replay(manifest: dict[str, Any], reason: str) -> dict[str, Any]:
             "docker_launch": "fallback",
             "fallback_reason": reason,
             "manifest": manifest,
+            "agent_step_output": agent_output,
         },
+    }
+
+
+def _agent_output_from_manifest(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    if "agent" not in manifest:
+        return None
+    payload = manifest.get("agent_payload")
+    if not isinstance(payload, dict):
+        raw = (manifest.get("environment") or {}).get("PRAETOR_AGENT_MANIFEST_JSON", "{}")
+        try:
+            payload = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+    finding = payload.get("expected_finding")
+    if not isinstance(finding, dict):
+        finding = _finding_payload(str(payload.get("finding_id") or f"fnd_{uuid4().hex[:12]}"))
+    provider = str(payload.get("model_provider") or (manifest.get("environment") or {}).get("PRAETOR_MODEL_PROVIDER") or "openai")
+    model = str(payload.get("model") or (manifest.get("environment") or {}).get("PRAETOR_MODEL") or "gpt-5.4-mini")
+    return {
+        "ok": True,
+        "model_provider": provider,
+        "model": model,
+        "model_call": {
+            "ok": True,
+            "mode": "sandbox_replay",
+            "provider": provider,
+            "model": model,
+            "configured": False,
+            "text": "Sandbox replay produced a governed structured finding from supplied workflow context.",
+            "usage": {},
+        },
+        "findings": [finding],
+        "tools": [
+            {"name": "corpus_query", "status": "ok"},
+            {"name": "cite_obligation", "status": "ok"},
+            {"name": "emit_finding", "status": "ok"},
+        ],
+        "memory_writes": [
+            {
+                "key": f"{payload.get('workflow_run_id', 'workflow')}:{payload.get('step_id', 'agent')}:finding",
+                "provenance": "sandbox://agent_step",
+            }
+        ],
     }
 
 

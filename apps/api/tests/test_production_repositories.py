@@ -36,6 +36,8 @@ async def test_production_workflow_events_and_review_lifecycle() -> None:
     assert scan_step["outputs_redacted"]["workflow_agent_asset_urn"].startswith(
         "urn:praetor:asset:workflow_agent:"
     )
+    assert scan_step["outputs_redacted"]["agent_execution"] == "sandbox"
+    assert scan_step["outputs_redacted"]["model_call"]["mode"].startswith("sandbox_")
 
     async with AsyncSessionLocal() as session:
         sandbox_count = await session.scalar(select(SandboxRun).where(SandboxRun.step_run_id.is_not(None)).limit(1))
@@ -101,6 +103,7 @@ async def test_queued_workflow_drain_executes_persisted_run() -> None:
     scan_step = next(step for step in processed[0]["step_runs"] if step["step_id"] == "scan")
     assert scan_step["sandbox_run_id"].startswith("sbx_")
     assert scan_step["outputs_redacted"]["sandbox"]["mode"] in {"replay", "docker", "docker-socket"}
+    assert scan_step["outputs_redacted"]["agent_execution"] == "sandbox"
 
 
 @pytest.mark.asyncio

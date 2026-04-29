@@ -30,6 +30,7 @@ const python = isWindows ? "python" : "python3";
 
 run("api unit tests", python, ["-m", "pytest"], path.join(root, "apps", "api"));
 run("workflow unit tests", python, ["-m", "pytest"], path.join(root, "apps", "workflow"));
+run("sandbox unit tests", python, ["-m", "pytest"], path.join(root, "apps", "sandbox"));
 
 const webCwd = path.join(root, "apps", "web");
 const webTypecheck = npmCommand(["run", "typecheck"]);

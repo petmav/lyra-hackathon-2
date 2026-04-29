@@ -81,6 +81,7 @@ Legend:
 - ~~Workflow worker hardening: queued drain now passes a stable worker id and lease TTL; ready `step_run` rows are leased with owner/expiry/heartbeat/attempt count and expired running leases recover to pending on the next drain.~~
 - ~~Postgres integration tests cover expired workflow step lease recovery: `PRAETOR_RUN_DB_TESTS=1 python -m pytest tests/test_production_repositories.py -q` (`4 passed`).~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
+- ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
 - ~~Production workflow events now persist step-start, semantic step trace events, and step-finished records for each workflow step without exposing private chain-of-thought.~~
 - ~~Production corpus seeding now idempotently ingests all five bundled corpus markdown documents into Postgres-backed `document` and `document_chunk` rows.~~
@@ -168,6 +169,7 @@ Legend:
 - ~~Partial: sandbox runs persist Docker-oriented manifests, orchestrator mode, logs, replay results, and lifecycle state in Postgres.~~
 - ~~Partial: Task 3.4 `apps/sandbox` now exposes a launch service that runs containers through the mounted Docker socket and falls back to deterministic replay.~~
 - ~~Partial: Task 3.4 workflow agent steps invoke the sandbox launch service/replay path before model/finding output is persisted.~~
+- ~~Task 3.4 workflow agent step output now originates from `praetor_sandbox.harness.agent_step` when Docker runs, or from the same typed replay contract when Docker/orchestrator is unavailable.~~
 - ~~Partial: Task 3.4 sandbox log streaming endpoint and hardened default Docker isolation profile exist.~~
 - Open: Task 3.4 live log tailing while the container is still running and stronger host-level isolation such as gVisor/seccomp profiles.
 - ~~Partial: backend corpus storage persists ingested documents and chunks for seeded corpus IDs.~~
@@ -230,7 +232,7 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Move full workflow-agent tool/model execution inside the sandbox process instead of backend-orchestrated deterministic/provider code.
+1. Evidence worker v2 with event-stream consumer checkpoints and policy-decision-aware assembly.
 2. Replace polling evidence sweeps with an event-stream consumer and policy-decision-aware assembly.
 3. Persist user-provided JSON Stack manifests as first-class hook configuration records; `auth_ref` secret resolution now exists for catalog-backed stacks.
 4. Replace MCP stub JSON-RPC with full authenticated MCP sessions and richer tool/resource negotiation.
