@@ -9,6 +9,7 @@ class Workflow(EntityMixin, Base):
     __tablename__ = "workflow"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     definition: Mapped[str] = mapped_column(Text, nullable=False)
     trigger: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger_config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
@@ -18,3 +19,4 @@ class Workflow(EntityMixin, Base):
     required_corpora: Mapped[list[str]] = mapped_column(ARRAY(String), default=list, nullable=False)
     default_policy_set: Mapped[str] = mapped_column(String(255), nullable=False)
     template_origin: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    graph: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
