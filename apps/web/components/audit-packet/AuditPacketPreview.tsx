@@ -17,7 +17,7 @@ export function AuditPacketPreview({ packet }: { packet: AuditPacket }) {
   return (
     <div className="overflow-hidden border border-rule">
       <div className="grid lg:grid-cols-[1.1fr_1fr]">
-        <div className="border-r border-rule bg-paper text-ink p-10 min-h-[480px] relative">
+        <div className="relative flex flex-col border-r border-rule bg-paper text-ink p-10 min-h-[560px]">
           {/* paper grain */}
           <div
             aria-hidden
@@ -27,7 +27,7 @@ export function AuditPacketPreview({ packet }: { packet: AuditPacket }) {
                 "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.16 0 0 0 0 0.14 0 0 0 0 0.10 0 0 0 0.18 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")"
             }}
           />
-          <div className="relative">
+          <div className="relative flex flex-1 flex-col">
             <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.22em] text-ink/60">
               <span>Praetor · Audit Packet</span>
               <span>v 1.0 · ed25519</span>
@@ -65,6 +65,26 @@ export function AuditPacketPreview({ packet }: { packet: AuditPacket }) {
               </Field>
             </div>
 
+            {packet.scope && Object.keys(packet.scope).filter((k) => k !== "label").length > 0 && (
+              <div className="mt-8">
+                <div className="text-[9.5px] uppercase tracking-[0.22em] text-ink/55 mb-2">Scope detail</div>
+                <ul className="space-y-1 text-[11.5px] font-mono text-ink/70">
+                  {Object.entries(packet.scope).map(([key, value]) => {
+                    if (key === "label") return null;
+                    const display = Array.isArray(value)
+                      ? value.length === 0 ? "—" : value.join(", ")
+                      : String(value ?? "—");
+                    return (
+                      <li key={key} className="flex gap-3">
+                        <span className="text-ink/50 w-32 shrink-0">{key}</span>
+                        <span className="text-ink break-all">{display}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
             {packet.counts && (
               <>
                 <hr className="my-10 border-ink/15" />
@@ -78,7 +98,7 @@ export function AuditPacketPreview({ packet }: { packet: AuditPacket }) {
               </>
             )}
 
-            <div className="absolute bottom-6 left-10 right-10 flex items-end justify-between text-[10px] uppercase tracking-[0.22em] text-ink/60">
+            <div className="mt-auto pt-12 flex items-end justify-between text-[10px] uppercase tracking-[0.22em] text-ink/60">
               <span>Confidential · Praetor signed</span>
               <span>Page 1 / —</span>
             </div>

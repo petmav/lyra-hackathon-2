@@ -627,17 +627,33 @@ async def _consume_evidence_events_from_stream(
     }
 
 
-async def generate_audit_packet(session: AsyncSession) -> dict[str, Any]:
+async def list_audit_packets(session: AsyncSession) -> list[dict[str, Any]]:
+    result = await session.execute(select(AuditPacket).order_by(AuditPacket.period_end.desc()))
+    return [_packet_to_api(row) for row in result.scalars().all()]
+
+
+async def get_audit_packet(session: AsyncSession, packet_id: str) -> dict[str, Any] | None:
+    urn = f"{AUDIT_PACKET_URN_PREFIX}{packet_id}"
+    result = await session.execute(select(AuditPacket).where(AuditPacket.urn == urn))
+    row = result.scalar_one_or_none()
+    return _packet_to_api(row) if row is not None else None
+
+
+async def generate_audit_packet(
+    session: AsyncSession, scope: dict[str, Any] | None = None
+) -> dict[str, Any]:
     await consume_evidence_events(session)
     evidence = await list_evidence_records(session)
     period_start = _now()
     period_end = _now()
     packet_id = f"pkt_{uuid4().hex[:12]}"
+    base_scope = {"tenant": "demo", "surfaces": ["workflow", "supervision"]}
+    merged_scope = {**base_scope, **(scope or {})}
     sidecar = {
         "id": packet_id,
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
-        "scope": {"tenant": "demo", "surfaces": ["workflow", "supervision"]},
+        "scope": merged_scope,
         "evidence_records": evidence,
     }
     packet_hash = _hash(sidecar)
@@ -1108,10 +1124,12 @@ def _packet_to_api(row: AuditPacket) -> dict[str, Any]:
         "period_start": row.period_start.isoformat(),
         "period_end": row.period_end.isoformat(),
         "scope": row.scope,
+        "status": "ready",
         "pdf_path": row.pdf_path,
         "json_sidecar_path": row.json_sidecar_path,
         "packet_hash": row.packet_hash,
         "signature": row.signature,
+        "generated_at": row.created_at.isoformat() if row.created_at else None,
     }
 
 
