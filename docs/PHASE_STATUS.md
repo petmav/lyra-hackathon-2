@@ -12,12 +12,13 @@ Legend:
 ## Current Verification
 
 - ~~API tests: `27 passed` via `cd apps/api && python -m pytest`.~~
-- ~~Workflow tests: `5 passed` via `scripts/test.ps1`.~~
+- ~~Workflow tests: `5 passed` via `scripts/test.ps1` / `npm test`.~~
 - ~~Alembic head exists: `0001 (head)`.~~
 - ~~Compose config validates: `docker compose -f infra/compose/docker-compose.yml config`.~~
 - ~~Compose production env validates with `PRAETOR_ENV_FILE=.env.production.example`.~~
 - ~~Root npm scripts exist for `npm run demo`, `npm run prod`, `npm run demo:api`, `npm run prod:api`, `npm run demo:web`, `npm run prod:web`.~~
 - ~~Web build validates with `NEXT_DIST_DIR=.next-verify npm run build`.~~
+- ~~Root `npm test` now runs API tests, workflow tests, web typecheck, and web production build through a cross-platform Node runner.~~
 - ~~Default web build validates with `cd apps/web && npm run build`.~~
 - ~~Live Docker Compose stack boots API, web, workflow, sandbox, Postgres, Redis, MinIO, OPA, and MCP stubs.~~
 - ~~Live Docker health checks pass for OPA, Postgres, Redis, and MinIO.~~
@@ -68,7 +69,7 @@ Legend:
 - ~~Runtime readiness now reports model provider keys and JSON Stack integration secret readiness via `GET /runtime/readiness`, `GET /models/readiness`, and `POST /models:check`.~~
 - ~~JSON Stack hooks resolve `auth_ref` values from environment variables for non-dry-run calls and fail clearly with `missing-secret` when a token is absent.~~
 - ~~Production `change.propose` workflow steps now persist `proposed_change` rows linked to emitted findings.~~
-- Open: `make test` cannot run on this Windows shell because `make` is not installed; use `scripts/test.ps1` or `npm test`.
+- ~~Windows without `make` is covered by `npm test` and `scripts/test.ps1`; `Makefile test` remains available on shells with make installed.~~
 - ~~Latest local web build passes without killing Node processes.~~
 - ~~Production `change.propose` step persists proposal rows that can be sandboxed, approved, and applied through the review API.~~
 - ~~Production asset inventory, obligations, controls, and sandbox-run listing now have backend API surfaces and API-mode frontend calls.~~
@@ -107,6 +108,7 @@ Legend:
 - ~~`docker compose up` and `alembic upgrade head` were run against live Postgres.~~
 - ~~Opt-in DB integration tests exist for local/Compose Postgres.~~
 - ~~Task 1.7 add CI service containers for Postgres and Redis and run DB integration tests.~~
+- ~~Phase 1 hardening: web Docker image now uses Next standalone output and a scoped `.dockerignore`; rebuilt with `docker compose -f infra/compose/docker-compose.yml build web`.~~
 
 ## Phase 2 - Vertical Slice
 

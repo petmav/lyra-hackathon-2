@@ -2,7 +2,7 @@
 
 Praetor has three test layers:
 
-1. Unit and service tests through `npm test`.
+1. Unit, service, typecheck, and web build tests through `npm test`.
 2. Web type/build checks from `apps/web`.
 3. Live platform E2E checks through `npm run test:e2e`.
 
@@ -11,6 +11,14 @@ Praetor has three test layers:
 `npm run test:e2e` runs `scripts/e2e_platform.py` against a live stack. It is intentionally a single run file so CI, demos, and handoff testing all exercise the same critical path.
 
 Default targets:
+
+```bash
+npm test
+```
+
+This runs API pytest, workflow pytest, web typecheck, and web production build from one cross-platform Node script.
+
+Default E2E target:
 
 ```bash
 npm run test:e2e

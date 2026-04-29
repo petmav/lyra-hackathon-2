@@ -1,4 +1,4 @@
-.PHONY: up down demo seed migrate fmt lint test api-test workflow-test web-build
+.PHONY: up down demo seed migrate fmt lint test api-test workflow-test web-test web-build
 
 up:
 	docker compose -f infra/compose/docker-compose.yml up -d --build
@@ -15,13 +15,16 @@ seed:
 demo: down up migrate seed
 	@echo "open http://localhost:3000"
 
-test: api-test workflow-test
+test: api-test workflow-test web-test
 
 api-test:
 	cd apps/api && python -m pytest
 
 workflow-test:
 	cd apps/workflow && python -m pytest
+
+web-test:
+	cd apps/web && npm run typecheck
 
 web-build:
 	cd apps/web && npm run build

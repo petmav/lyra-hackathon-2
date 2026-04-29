@@ -7,3 +7,8 @@ Pop-Location
 Push-Location "$PSScriptRoot\..\apps\workflow"
 python -m pytest
 Pop-Location
+
+Push-Location "$PSScriptRoot\..\apps\web"
+npm run typecheck
+npm run build
+Pop-Location
