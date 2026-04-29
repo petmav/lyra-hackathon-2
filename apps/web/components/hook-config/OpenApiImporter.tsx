@@ -91,7 +91,7 @@ export function OpenApiImporter() {
     try {
       return JSON.parse(text) as Record<string, unknown>;
     } catch (e) {
-      setParseError(e instanceof Error ? e.message : String(e));
+      setParseError(`Local operation preview requires JSON. YAML is accepted by backend import: ${e instanceof Error ? e.message : String(e)}`);
       return null;
     }
   }, [text]);
@@ -108,10 +108,29 @@ export function OpenApiImporter() {
   };
 
   const build = async () => {
-    if (!parsed) return;
-    const next = buildManifest(parsed, operations.filter((op) => selected.has(op.key)), stackId, provider, authRef);
-    setManifest(next);
+    setBusy(true);
     setSaveState(null);
+    try {
+      const imported = await api.hooks.importOpenApi({
+        document: text,
+        stack_id: stackId,
+        provider,
+        auth_ref: authRef || null,
+        selected_operations: parsed ? operations.filter((op) => selected.has(op.key)).map((op) => op.key) : []
+      });
+      setManifest(imported.manifest);
+      if (!imported.ok) setSaveState(`Import warnings: ${imported.errors.join("; ")}`);
+    } catch (e) {
+      if (!parsed) {
+        setSaveState(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const next = buildManifest(parsed, operations.filter((op) => selected.has(op.key)), stackId, provider, authRef);
+      setManifest(next);
+      setSaveState("Backend import unavailable; generated local JSON-only manifest.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const persist = async () => {
@@ -144,7 +163,7 @@ export function OpenApiImporter() {
 
         <div>
           <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-paper-fade mb-1.5">
-            OpenAPI JSON
+            OpenAPI JSON or YAML
           </label>
           <textarea
             value={text}
@@ -161,9 +180,9 @@ export function OpenApiImporter() {
           <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-paper-fade">
             Operations
           </div>
-          <Button size="sm" onClick={build} disabled={!parsed || selected.size === 0}>
+          <Button size="sm" onClick={build} disabled={busy || !text.trim() || (Boolean(parsed) && selected.size === 0)}>
             <FileJson size={12} strokeWidth={1.75} />
-            Convert
+            {busy ? "Converting..." : "Convert"}
           </Button>
         </div>
 
@@ -175,7 +194,7 @@ export function OpenApiImporter() {
           <div className="border border-rule rounded-sm overflow-hidden">
             {operations.length === 0 ? (
               <div className="px-4 py-6 text-[12px] text-paper-fade">
-                No OpenAPI operations found.
+                No local JSON operations found. YAML documents can still be converted by the backend importer.
               </div>
             ) : operations.map((op, index) => (
               <label

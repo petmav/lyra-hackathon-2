@@ -302,6 +302,11 @@ export interface JsonStackAuth {
   kind: string;
   auth_ref: string | null;
   scopes?: string[];
+  scheme_name?: string;
+  api_key_in?: string;
+  api_key_name?: string;
+  flows?: Record<string, unknown>;
+  openIdConnectUrl?: string;
 }
 
 export interface JsonStackManifest {
@@ -330,6 +335,20 @@ export interface JsonStackPersistResult {
   ok: boolean;
   hook?: Hook;
   errors?: string[];
+}
+
+export interface JsonStackOpenApiImportRequest {
+  document: string;
+  stack_id: string;
+  provider: string;
+  auth_ref?: string | null;
+  selected_operations?: string[];
+}
+
+export interface JsonStackOpenApiImportResult {
+  ok: boolean;
+  manifest: JsonStackManifest;
+  errors: string[];
 }
 
 export interface JsonStackPreviewRendered {

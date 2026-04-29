@@ -84,6 +84,69 @@ def test_json_stack_validation_rejects_inline_secrets() -> None:
     assert validate_stack(spec) == ["operation create_finding must use auth_ref, not inline secrets"]
 
 
+def test_openapi_yaml_import_maps_security_schemes() -> None:
+    document = """
+openapi: 3.1.0
+info:
+  title: Internal GRC
+  version: 2026-04
+servers:
+  - url: https://grc.internal.example
+components:
+  securitySchemes:
+    oauth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://idp.internal/token
+          scopes:
+            grc.write: Write GRC records
+security:
+  - oauth:
+      - grc.write
+paths:
+  /findings:
+    post:
+      operationId: createFinding
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  url:
+                    type: string
+"""
+    response = TestClient(app).post(
+        "/hooks/json-stack:import-openapi",
+        headers=HEADERS,
+        json={
+            "document": document,
+            "stack_id": "internal_grc_yaml",
+            "provider": "internal_grc",
+            "selected_operations": ["POST /findings"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    manifest = payload["manifest"]
+    assert manifest["auth"]["kind"] == "oauth2"
+    assert manifest["auth"]["auth_ref"] == "secret:internal_grc_oauth"
+    assert manifest["auth"]["scopes"] == ["grc.write"]
+    assert manifest["operations"]["createfinding"]["output_map"] == {"id": "$.id", "url": "$.url"}
+
+
 def test_catalog_request_rendering() -> None:
     spec = get_stack("servicenow_grc_json")
     assert spec is not None

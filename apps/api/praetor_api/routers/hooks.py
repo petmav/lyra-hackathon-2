@@ -5,6 +5,7 @@ from praetor_api.db import AsyncSessionLocal
 from praetor_api.services.hooks import CALLS, HOOKS, call_hook, test_hook
 from praetor_api.services import production_hooks
 from praetor_api.services.json_stack import call_stack, catalog_summary, get_stack, validate_stack
+from praetor_api.services.openapi_importer import OpenApiImportError, import_openapi_to_json_stack
 from praetor_api.settings import get_settings
 
 router = APIRouter(tags=["hooks"])
@@ -33,6 +34,14 @@ class JsonStackPreviewRequest(BaseModel):
     inputs: dict = Field(default_factory=dict)
 
 
+class JsonStackOpenApiImportRequest(BaseModel):
+    document: str
+    stack_id: str
+    provider: str
+    auth_ref: str | None = None
+    selected_operations: list[str] = Field(default_factory=list)
+
+
 @router.get("/hooks/json-stack/catalog")
 async def json_stack_catalog() -> list[dict]:
     return catalog_summary()
@@ -51,6 +60,23 @@ async def json_stack_catalog_item(stack_id: str) -> dict:
 async def json_stack_validate(request: JsonStackValidateRequest) -> dict:
     errors = validate_stack(request.spec)
     return {"ok": not errors, "errors": errors}
+
+
+@router.post("/hooks/json-stack:import-openapi")
+@router.post("/hooks/json-stack/import-openapi")
+async def json_stack_import_openapi(request: JsonStackOpenApiImportRequest) -> dict:
+    try:
+        manifest = import_openapi_to_json_stack(
+            request.document,
+            stack_id=request.stack_id,
+            provider=request.provider,
+            auth_ref=request.auth_ref,
+            selected_operations=request.selected_operations,
+        )
+    except OpenApiImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    errors = validate_stack(manifest)
+    return {"ok": not errors, "manifest": manifest, "errors": errors}
 
 
 @router.post("/hooks/json-stack:preview")

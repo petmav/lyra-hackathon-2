@@ -48,6 +48,8 @@ import type {
   HookCall,
   JsonStackCatalogEntry,
   JsonStackManifest,
+  JsonStackOpenApiImportRequest,
+  JsonStackOpenApiImportResult,
   JsonStackPersistResult,
   JsonStackPreviewRequest,
   JsonStackPreviewResult,
@@ -361,6 +363,28 @@ export const api = {
       }
       await sleep();
       return { ok: false, errors: ["NEXT_PUBLIC_API_BASE not configured"] };
+    },
+    async importOpenApi(req: JsonStackOpenApiImportRequest): Promise<JsonStackOpenApiImportResult> {
+      if (USE_API) {
+        return request<JsonStackOpenApiImportResult>("/hooks/json-stack:import-openapi", {
+          method: "POST",
+          body: JSON.stringify(req)
+        });
+      }
+      await sleep();
+      return {
+        ok: false,
+        manifest: {
+          id: req.stack_id,
+          name: req.stack_id,
+          provider: req.provider,
+          version: "unavailable",
+          base_url: "https://api.example.com",
+          auth: { kind: "none", auth_ref: null, scopes: [] },
+          operations: {}
+        },
+        errors: ["NEXT_PUBLIC_API_BASE not configured"]
+      };
     }
   },
 

@@ -94,6 +94,7 @@ Legend:
 - ~~JWT/RBAC auth mode exists alongside demo bearer auth: `PRAETOR_AUTH_MODE=jwt` validates HS256 JWTs, issuer/audience, viewer/operator/admin roles, HTTP requests, and WebSocket streams.~~
 - ~~Secret resolution now supports HashiCorp Vault KV v2 through `PRAETOR_SECRET_BACKEND=vault|env_then_vault|vault_then_env`, and model provider keys can resolve from `secret:openai_api_key`, `secret:anthropic_api_key`, and `secret:google_api_key`.~~
 - ~~Evidence worker v2 now consumes production workflow events through a Redis Streams consumer group and ACKs stream entries only after evidence rows commit, with persisted event-table fallback when Redis is unavailable.~~
+- ~~JSON Stack OpenAPI import now accepts JSON or YAML through `POST /hooks/json-stack:import-openapi`, maps selected operations, infers input/output maps, and preserves supported OpenAPI security scheme metadata.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -248,6 +249,7 @@ Legend:
 - ~~Remediation dispatch catalog includes researched endpoint mappings for GitHub PRs, Jira issues, Linear issues, Microsoft Graph email, Slack messages, and ServiceNow records.~~
 - ~~Custom JSON Stack manifests persist through `POST /hooks/json-stack` and can be called like catalog-backed hooks.~~
 - ~~OpenAPI-to-JSON-Stack importer exists on `/hooks/validate` for internal REST systems and vendor APIs.~~
+- ~~OpenAPI-to-JSON-Stack importer accepts YAML and maps `apiKey`, HTTP bearer/basic, OAuth2, and OpenID Connect security schemes.~~
 - ~~MCP hook auth refs can be backed by `MCP_GITHUB_TOKEN`, `MCP_SLACK_TOKEN`, and `MCP_LOCALFILES_TOKEN`; Compose stubs enforce them when set.~~
 - ~~Provider-specific streaming endpoint: `POST /models:stream`.~~
 - Open: store model/provider choice on real `policy_decision` rows when policy decisions move out of deterministic fixtures.
@@ -258,11 +260,11 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add YAML parsing and richer OpenAPI security scheme import.
-2. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
-3. Add provider streaming to the frontend/runtime views where live partial output is useful.
-4. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
-5. Add first-class policy decision persistence for workflow gates.
+1. Add dynamic OAuth client registration for remote MCP servers beyond preconfigured bearer auth refs.
+2. Add provider streaming to the frontend/runtime views where live partial output is useful.
+3. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
+4. Add first-class policy decision persistence for workflow gates.
+5. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
 
 ## Update Rules For Future Work
 

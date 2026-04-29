@@ -63,10 +63,11 @@ Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 - `GET /hooks/json-stack/catalog` lists proprietary JSON Hook Stack templates.
 - `GET /hooks/json-stack/catalog/{stack_id}` returns a JSON Stack manifest.
 - `POST /hooks/json-stack:validate` validates a user-provided JSON Stack manifest.
+- `POST /hooks/json-stack:import-openapi` accepts OpenAPI JSON or YAML and converts selected operations into a JSON Stack manifest, including supported security scheme metadata.
 - `POST /hooks/json-stack:preview` renders a dry-run request for a stack operation.
 - `POST /hooks/json-stack` validates and persists a user-provided JSON Stack manifest as a first-class `hook` record in production mode.
 
-The frontend `/hooks/validate` page includes an OpenAPI JSON importer that extracts selected operations, infers JSON Stack direction/effect metadata, builds input schemas and output maps, and saves the generated manifest through `POST /hooks/json-stack`.
+The frontend `/hooks/validate` page includes an OpenAPI JSON/YAML importer that extracts selected operations, infers JSON Stack direction/effect metadata, builds input schemas and output maps, imports OpenAPI `securitySchemes`, and saves the generated manifest through `POST /hooks/json-stack`.
 
 Demo hook operations:
 
