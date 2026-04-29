@@ -1,0 +1,37 @@
+[
+  {
+    "slide": 1,
+    "elementCount": 8,
+    "textCount": 8
+  },
+  {
+    "slide": 2,
+    "elementCount": 16,
+    "textCount": 16
+  },
+  {
+    "slide": 3,
+    "elementCount": 16,
+    "textCount": 16
+  },
+  {
+    "slide": 4,
+    "elementCount": 14,
+    "textCount": 14
+  },
+  {
+    "slide": 5,
+    "elementCount": 36,
+    "textCount": 36
+  },
+  {
+    "slide": 6,
+    "elementCount": 27,
+    "textCount": 27
+  },
+  {
+    "slide": 7,
+    "elementCount": 14,
+    "textCount": 14
+  }
+]
