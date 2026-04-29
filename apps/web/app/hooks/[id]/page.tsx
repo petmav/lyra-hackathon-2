@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type { Hook, JsonStackManifest } from "@/lib/api/types";
 import { PageHeader } from "@/components/shell/PageHeader";
@@ -11,12 +11,21 @@ import { Badge } from "@/components/primitives/Badge";
 import { StatusDot } from "@/components/primitives/StatusDot";
 import { JsonStackOperations } from "@/components/hook-config/JsonStackOperations";
 import { CATEGORY_LABEL, categorizeHook, directionLabel, effectRadiusTone } from "@/lib/utils/hooks";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Check, Loader2, X } from "lucide-react";
+
+type TestState =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "ok"; latency_ms: number; resources_count: number }
+  | { kind: "error"; message: string };
 
 export default function HookDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const searchParams = useSearchParams();
+  const autoTest = searchParams.get("test") === "1";
   const [hook, setHook] = useState<Hook | null | undefined>(undefined);
   const [manifest, setManifest] = useState<JsonStackManifest | null>(null);
+  const [testState, setTestState] = useState<TestState>({ kind: "idle" });
 
   useEffect(() => {
     let alive = true;
@@ -32,6 +41,25 @@ export default function HookDetailPage({ params }: { params: Promise<{ id: strin
     })();
     return () => { alive = false; };
   }, [id]);
+
+  useEffect(() => {
+    if (!autoTest || !hook) return;
+    let alive = true;
+    (async () => {
+      setTestState({ kind: "running" });
+      try {
+        const r = await api.hooks.test(hook.id);
+        if (!alive) return;
+        setTestState(r.ok
+          ? { kind: "ok", latency_ms: r.latency_ms, resources_count: r.resources_count }
+          : { kind: "error", message: "Test reported not-ok" });
+      } catch (e) {
+        if (!alive) return;
+        setTestState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return () => { alive = false; };
+  }, [autoTest, hook]);
 
   if (hook === undefined) {
     return (
@@ -76,6 +104,30 @@ export default function HookDetailPage({ params }: { params: Promise<{ id: strin
           </div>
         }
       />
+
+      {testState.kind !== "idle" && (
+        <div
+          role="status"
+          className={`mt-2 mb-4 flex items-center gap-2 border rounded-sm px-4 py-2 text-[12.5px] ${
+            testState.kind === "ok"
+              ? "border-ok/40 bg-ok/5 text-ok"
+              : testState.kind === "error"
+                ? "border-crit/40 bg-crit/5 text-crit"
+                : "border-rule bg-ink-2 text-paper-dim"
+          }`}
+        >
+          {testState.kind === "running" && <Loader2 size={13} strokeWidth={1.75} className="animate-spin" />}
+          {testState.kind === "ok" && <Check size={13} strokeWidth={1.75} />}
+          {testState.kind === "error" && <X size={13} strokeWidth={1.75} />}
+          {testState.kind === "running" && <span>Running connectivity test…</span>}
+          {testState.kind === "ok" && (
+            <span>
+              Hook is healthy — <span className="font-mono">{testState.latency_ms}ms</span>, {testState.resources_count} resources reachable.
+            </span>
+          )}
+          {testState.kind === "error" && <span className="font-mono">{testState.message}</span>}
+        </div>
+      )}
 
       <Section eyebrow="Configuration" title="Connection">
         <ConnectionPanel hook={hook} manifest={manifest} />

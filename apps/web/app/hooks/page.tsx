@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/shell/PageHeader";
 import { Section } from "@/components/primitives/Section";
 import { HooksDirectory } from "@/components/hook-config/HooksDirectory";
 import { HookCalls } from "@/components/hook-config/HookCalls";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Plus } from "lucide-react";
 
 export default function HooksPage() {
   const [hooks, setHooks] = useState<Hook[]>([]);
@@ -39,13 +39,22 @@ export default function HooksPage() {
         title="Boundary crossings."
         subtitle="Every hook is hash-chained. Outbound calls with a non-internal effect radius require an upstream gate.human approval. MCP servers and JSON Hook Stack templates share this control plane."
         aside={
-          <Link
-            href="/hooks/validate"
-            className="inline-flex items-center gap-2 border border-rule px-3 py-2 text-[12px] text-paper-dim hover:text-paper hover:border-rule-bright transition-colors rounded-sm"
-          >
-            Validate manifest
-            <ArrowUpRight size={13} strokeWidth={1.75} />
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/hooks/validate?new=1"
+              className="inline-flex items-center gap-2 border border-gold px-3 py-2 text-[12px] text-gold hover:bg-gold hover:text-ink transition-colors rounded-sm"
+            >
+              <Plus size={13} strokeWidth={1.75} />
+              New JSON Stack hook
+            </Link>
+            <Link
+              href="/hooks/validate"
+              className="inline-flex items-center gap-2 border border-rule px-3 py-2 text-[12px] text-paper-dim hover:text-paper hover:border-rule-bright transition-colors rounded-sm"
+            >
+              Validate manifest
+              <ArrowUpRight size={13} strokeWidth={1.75} />
+            </Link>
+          </div>
         }
       />
 
