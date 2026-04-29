@@ -17,10 +17,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="min-h-screen">
         <Sidebar />
-        <div className="ml-[224px] flex min-h-screen flex-col">
+        <div className="flex min-h-screen flex-col md:ml-[224px]">
           <Header />
-          <main className="flex-1 px-8 pt-8 pb-16">{children}</main>
-          <footer className="border-t border-rule px-8 py-5 text-[11.5px] text-paper-fade flex items-center justify-between">
+          <main className="flex-1 px-4 pt-6 pb-16 md:px-8 md:pt-8">{children}</main>
+          <footer className="border-t border-rule px-4 py-5 text-[11.5px] text-paper-fade flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:px-8">
             <span>
               Praetor — governed runtime for agentic GRC.{" "}
               <span className="text-paper-dim">

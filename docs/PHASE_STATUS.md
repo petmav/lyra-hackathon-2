@@ -21,6 +21,7 @@ Legend:
 - ~~Root `npm test` now runs API tests, workflow tests, web typecheck, and web production build through a cross-platform Node runner.~~
 - ~~Latest root verification: `npm test` passes with API `42 passed, 1 skipped`, workflow `6 passed`, sandbox `1 passed`, web typecheck passed, and web production build passed.~~
 - ~~Default web build validates with `cd apps/web && npm run build`.~~
+- ~~Playwright web E2E validates desktop and mobile demo UI flows: `npm --prefix apps/web run e2e` (`14 passed`) with screenshots written under ignored `screenshots/e2e/`.~~
 - ~~Live Docker Compose stack boots API, web, workflow, sandbox, Postgres, Redis, MinIO, OPA, and MCP stubs.~~
 - ~~Live Docker health checks pass for OPA, Postgres, Redis, and MinIO.~~
 - ~~Live API health returns `{"ok": true, "data_mode": "demo", "data_backend": "in_memory"}`.~~
@@ -204,6 +205,7 @@ Legend:
 - ~~Partial: production `code_compliance_scan` writes workflow and step events to `agent_event` with hash-chain continuity.~~
 - ~~Runtime events and hash-chain writes are covered for every production workflow template path.~~
 - ~~Runtime events now include per-step semantic trace records for hooks, corpus queries, agent execution, sandbox execution, policy gates, approvals, findings, proposals, and outbound hooks.~~
+- ~~Dashboard links now resolve from available workflow-run data instead of hardcoded fixture IDs, preventing production/API-mode 404s after reseeds.~~
 - Open: runtime events and hash-chain writes for non-workflow agent actions.
 
 ## Phase 4 - Evidence, Audit Packet, Polish
@@ -229,6 +231,8 @@ Legend:
 
 - ~~Task 5.3: Sandbox replay mode exists as deterministic API behavior.~~
 - ~~Task 5.5: README/DEMO-style documentation exists, including `docs/DEMO.md` and `docs/API.md`.~~
+- ~~Demo and business-flow Playwright suite exists for core route rendering, current-record dashboard links, workflow instantiation, finding/remediation review, hook validation/provider readiness, evidence packet generation, and a pitch walkthrough.~~
+- ~~Responsive shell no longer overlays page actions on mobile; the sidebar becomes a top navigation rail below the desktop breakpoint.~~
 - ~~Task 5.1: Windows-friendly npm scripts exist for demo/prod, seed, reset, and tests.~~
 - Open: Task 5.2 backup video.
 - Open: Task 5.4 pitch-deck slide last-mile.

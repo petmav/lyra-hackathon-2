@@ -16,6 +16,7 @@
     "clear:prod": "python scripts/clear_prod.py",
     "verify:audit": "python scripts/verify_audit_packet.py",
     "test:e2e": "python scripts/e2e_platform.py",
+    "test:e2e:web": "npm --prefix apps/web run e2e",
     "test:api": "cd apps/api && python -m pytest",
     "test:workflow": "cd apps/workflow && python -m pytest",
     "test:web": "cd apps/web && npm run typecheck && npm run build",

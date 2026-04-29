@@ -38,22 +38,22 @@ const GROUP_LABELS: Record<typeof NAV[number]["group"], string> = {
 export function Sidebar() {
   const pathname = usePathname();
   return (
-    <aside className="fixed left-0 top-0 z-30 flex h-screen w-[224px] flex-col border-r border-rule bg-ink">
-      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-rule">
+    <aside className="sticky top-0 z-30 flex w-full flex-col border-b border-rule bg-ink md:fixed md:left-0 md:top-0 md:h-screen md:w-[224px] md:border-b-0 md:border-r">
+      <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3 md:px-5 md:py-5">
         <Link href="/" aria-label="Praetor home" className="flex items-center gap-2.5">
           <span aria-hidden className="block h-2.5 w-2.5 bg-gold" />
           <span className="text-[15px] font-semibold tracking-tight text-paper">Praetor</span>
         </Link>
       </div>
 
-      <nav className="flex flex-1 flex-col overflow-y-auto px-3 py-5">
+      <nav className="flex gap-3 overflow-x-auto px-3 py-2 md:flex-1 md:flex-col md:gap-0 md:overflow-x-visible md:overflow-y-auto md:py-5">
         <NavGroup group="instrumentation" pathname={pathname} />
         <NavGroup group="workflows" pathname={pathname} />
         <NavGroup group="knowledge" pathname={pathname} />
         <NavGroup group="audit" pathname={pathname} />
       </nav>
 
-      <div className="border-t border-rule px-5 py-3 text-[11px]">
+      <div className="hidden border-t border-rule px-5 py-3 text-[11px] md:block">
         <div className="flex items-center justify-between text-paper-fade">
           <span>Tenant</span>
           <span className="font-mono text-paper-dim">demo</span>
@@ -70,11 +70,11 @@ export function Sidebar() {
 function NavGroup({ group, pathname }: { group: typeof NAV[number]["group"]; pathname: string }) {
   const items = NAV.filter((n) => n.group === group);
   return (
-    <div className="mb-5">
-      <div className="px-2 mb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-paper-fade">
+    <div className="shrink-0 md:mb-5">
+      <div className="hidden px-2 mb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-paper-fade md:block">
         {GROUP_LABELS[group]}
       </div>
-      <ul>
+      <ul className="flex gap-1 md:block">
         {items.map((item) => {
           const active = item.href === "/"
             ? pathname === "/"

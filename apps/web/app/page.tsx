@@ -32,6 +32,7 @@ export default async function DashboardPage() {
   ]);
 
   const liveRuns = runs.filter((r) => r.status === "running" || r.status === "awaiting_approval");
+  const primaryRun = liveRuns[0] ?? runs[0];
   const openFindings = findings.filter((f) => f.status === "open");
   const supervisedAgents = assets.filter((a) => a.type === "agent");
   const workflowAgents = assets.filter((a) => a.type === "workflow_agent");
@@ -49,10 +50,10 @@ export default async function DashboardPage() {
         subtitle="One control plane, two surfaces. The agents that do your compliance work are governed by the same runtime you offer for the AI you ship."
         aside={
           <Link
-            href="/workflow-runs/wfr_2026_04_28_001"
+            href={primaryRun ? `/workflow-runs/${primaryRun.id}` : "/workflow-runs"}
             className="inline-flex items-center gap-2 border border-gold px-3 py-2 text-[11px] uppercase tracking-[0.16em] text-gold hover:bg-gold hover:text-ink transition-colors"
           >
-            View live run
+            {primaryRun ? "View live run" : "View runs"}
             <ArrowUpRight size={13} strokeWidth={1.5} />
           </Link>
         }

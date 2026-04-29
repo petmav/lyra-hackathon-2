@@ -93,5 +93,6 @@ Production mode now registers and runs every bundled deterministic workflow temp
 10. `POST /hooks/{id}:call` records externally reliant GitHub, Slack, local-files, and JSON Stack operations; non-dry-run JSON Stack calls resolve `auth_ref` secrets from environment variables.
 11. `GET /events` and `WS /ws/v1/.../stream?token=dev` expose hash-chained workflow events.
 12. `npm run test:e2e` runs the critical live platform path in one command across API readiness, workflows, MCP/JSON Stack hooks, corpus, sandbox logs, evidence sweep, audit packets, and web routes.
+13. `npm run test:e2e:web` runs the Playwright UI suite across desktop and mobile. By default it starts an isolated fixture-mode web server on port 3100 and writes PNG evidence to `screenshots/e2e/`; set `PRAETOR_E2E_USE_EXISTING_SERVER=1` to point it at a running Docker/web stack.
 
 The current backend is intentionally deterministic. It is ready for replacing in-memory services with Postgres/Redis-backed implementations behind the same routes.

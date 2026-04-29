@@ -176,6 +176,7 @@ Latest local result:
 - Sandbox tests: `1 passed`
 - Web typecheck: passed
 - Web production build: passed
+- Web Playwright E2E: `14 passed` via `npm --prefix apps/web run e2e`
 
 Other verification paths exist for:
 
@@ -184,6 +185,7 @@ Other verification paths exist for:
 - Opt-in Postgres/Redis integration tests.
 - Audit packet signature verification.
 - Playwright screenshots under ignored `screenshots/`.
+- Desktop/mobile business-flow screenshots under ignored `screenshots/e2e/`.
 
 ## Recent Commits Of Note
 
