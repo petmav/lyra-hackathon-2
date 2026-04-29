@@ -43,7 +43,7 @@ const sharedEnv = {
   PRAETOR_DATA_MODE: mode,
   PRAETOR_SEED_DEMO_DATA: process.env.PRAETOR_SEED_DEMO_DATA ?? (mode === "demo" ? "1" : "0"),
   NEXT_PUBLIC_PRAETOR_DATA_MODE: mode,
-  NEXT_PUBLIC_DATA_SOURCE: process.env.NEXT_PUBLIC_DATA_SOURCE ?? (mode === "demo" ? "fixtures" : "api"),
+  NEXT_PUBLIC_DATA_SOURCE: process.env.NEXT_PUBLIC_DATA_SOURCE ?? (mode === "demo" ? "hybrid" : "api"),
   NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000",
   NEXT_PUBLIC_DEV_BEARER: process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev",
   NEXT_PUBLIC_API_TOKEN: process.env.NEXT_PUBLIC_API_TOKEN ?? process.env.NEXT_PUBLIC_DEV_BEARER ?? "dev",
