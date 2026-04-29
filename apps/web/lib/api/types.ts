@@ -351,6 +351,23 @@ export interface JsonStackOpenApiImportResult {
   errors: string[];
 }
 
+export interface ModelStreamRequest {
+  provider?: string;
+  model?: string;
+  prompt: string;
+  system?: string;
+  dry_run?: boolean;
+}
+
+export interface ModelStreamEvent {
+  type: "start" | "delta" | "usage" | "done" | "error";
+  provider?: string;
+  model?: string;
+  text?: string;
+  usage?: Record<string, unknown>;
+  error?: unknown;
+}
+
 export interface JsonStackPreviewRendered {
   method: string;
   url: string;

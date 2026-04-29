@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/shell/PageHeader";
 import { Section } from "@/components/primitives/Section";
 import { ManifestValidator } from "@/components/hook-config/ManifestValidator";
 import { OpenApiImporter } from "@/components/hook-config/OpenApiImporter";
+import { ProviderStreamProbe } from "@/components/model-stream/ProviderStreamProbe";
 import { ArrowLeft } from "lucide-react";
 
 export default function ValidateManifestPage() {
@@ -28,6 +29,10 @@ export default function ValidateManifestPage() {
 
       <Section eyebrow="Importer" title="OpenAPI to JSON Stack">
         <OpenApiImporter />
+      </Section>
+
+      <Section eyebrow="Models" title="Provider stream probe">
+        <ProviderStreamProbe />
       </Section>
     </div>
   );

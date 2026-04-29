@@ -53,6 +53,8 @@ import type {
   JsonStackPersistResult,
   JsonStackPreviewRequest,
   JsonStackPreviewResult,
+  ModelStreamEvent,
+  ModelStreamRequest,
   JsonStackValidateResult,
   Obligation,
   PolicyDecision,
@@ -102,6 +104,42 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function streamRequest(
+  path: string,
+  body: unknown,
+  onEvent: (event: ModelStreamEvent) => void
+): Promise<void> {
+  if (!API_BASE) throw new Error("NEXT_PUBLIC_API_BASE is not configured");
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${API_TOKEN}`
+    },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Praetor API ${response.status}: ${await response.text()}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      onEvent(JSON.parse(dataLine.slice(5)) as ModelStreamEvent);
+    }
+  }
+}
+
 async function backendOrFixture<T>(path: string, fixture: () => Promise<T>): Promise<T> {
   if (USE_FIXTURES) return fixture();
   if (!USE_API || !API_BASE) {
@@ -117,6 +155,24 @@ async function backendOrFixture<T>(path: string, fixture: () => Promise<T>): Pro
 }
 
 export const api = {
+  models: {
+    async stream(req: ModelStreamRequest, onEvent: (event: ModelStreamEvent) => void): Promise<void> {
+      if (!USE_API) {
+        const provider = req.provider ?? "openai";
+        const model = req.model ?? "default";
+        const text = `[dry-run:${provider}/${model}] ${req.prompt}`;
+        onEvent({ type: "start", provider, model });
+        for (let index = 0; index < text.length; index += 24) {
+          onEvent({ type: "delta", provider, model, text: text.slice(index, index + 24) });
+          await sleep(25);
+        }
+        onEvent({ type: "done", provider, model, text });
+        return;
+      }
+      return streamRequest("/models:stream", req, onEvent);
+    }
+  },
+
   // ─── assets / inventory ───────────────────────────────────────────────
   assets: {
     async list(): Promise<Asset[]> {

@@ -47,6 +47,8 @@ curl -N -X POST http://localhost:8000/models:stream \
   -d '{"provider":"anthropic","model":"claude-sonnet-4-20250514","prompt":"Summarize SOC 2 CC7.2","dry_run":true}'
 ```
 
+The frontend API client exposes this as `api.models.stream(...)`; `/hooks/validate` includes a provider stream probe for dry-run streaming verification across OpenAI, Anthropic, and Google selections.
+
 Workflow agent steps use `PRAETOR_AGENT_MODEL_MODE`:
 
 - `auto` calls the selected provider when its key is configured, otherwise records a deterministic dry-run model call.

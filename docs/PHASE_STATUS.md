@@ -96,6 +96,7 @@ Legend:
 - ~~Evidence worker v2 now consumes production workflow events through a Redis Streams consumer group and ACKs stream entries only after evidence rows commit, with persisted event-table fallback when Redis is unavailable.~~
 - ~~JSON Stack OpenAPI import now accepts JSON or YAML through `POST /hooks/json-stack:import-openapi`, maps selected operations, infers input/output maps, and preserves supported OpenAPI security scheme metadata.~~
 - ~~Remote MCP OAuth discovery and dynamic client registration exists: the MCP client reads protected-resource metadata, authorization-server metadata, and RFC 7591 `registration_endpoint` responses, with client secrets redacted from health output.~~
+- ~~Frontend runtime can consume provider SSE through `api.models.stream(...)`, and `/hooks/validate` includes a dry-run provider stream probe for OpenAI, Anthropic, and Google selections.~~
 - ~~Workflow `agent` steps now create `workflow_agent` Asset rows, launch through the sandbox orchestrator/replay contract, persist linked `sandbox_run` rows, and expose `sandbox_run_id` in workflow step responses.~~
 - ~~Workflow `agent` steps now consume structured `agent_step_output` emitted by the sandbox harness/replay path; backend service code validates and persists the result instead of calling the model adapter directly after launch.~~
 - ~~Workflow run step drawers now render an auditable runtime trace per step, including hook calls, corpus retrievals, agent rationale summaries, tool calls, sandbox launch/exit, findings, proposals, policy gates, approvals, and final outputs.~~
@@ -262,11 +263,11 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Add provider streaming to the frontend/runtime views where live partial output is useful.
-2. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
-3. Add first-class policy decision persistence for workflow gates.
-4. Persist registered MCP OAuth clients and complete authorization-code token exchange.
-5. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
+1. Replace local HS256 JWT mode with full OIDC/JWKS validation against the team's identity provider.
+2. Add first-class policy decision persistence for workflow gates.
+3. Persist registered MCP OAuth clients and complete authorization-code token exchange.
+4. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
+5. Add live model-stream traces inside workflow step drawers when provider calls run in `live` mode.
 
 ## Update Rules For Future Work
 
