@@ -19,6 +19,7 @@ Legend:
 - ~~Root npm scripts exist for `npm run demo`, `npm run prod`, `npm run demo:api`, `npm run prod:api`, `npm run demo:web`, `npm run prod:web`.~~
 - ~~Web build validates with `NEXT_DIST_DIR=.next-verify npm run build`.~~
 - ~~Root `npm test` now runs API tests, workflow tests, web typecheck, and web production build through a cross-platform Node runner.~~
+- ~~Latest root verification: `npm test` passes with API `41 passed, 1 skipped`, workflow `6 passed`, sandbox `1 passed`, web typecheck passed, and web production build passed.~~
 - ~~Default web build validates with `cd apps/web && npm run build`.~~
 - ~~Live Docker Compose stack boots API, web, workflow, sandbox, Postgres, Redis, MinIO, OPA, and MCP stubs.~~
 - ~~Live Docker health checks pass for OPA, Postgres, Redis, and MinIO.~~
@@ -266,11 +267,13 @@ Legend:
 
 ## Next Implementation Queue
 
-1. Persist registered MCP OAuth clients and complete authorization-code token exchange.
+1. Final platform step: persist registered MCP OAuth clients and complete authorization-code/token exchange.
 2. Add broader OpenAPI coverage for callbacks, links, multipart bodies, and polymorphic schemas.
 3. Add live model-stream traces inside workflow step drawers when provider calls run in `live` mode.
 4. Add JWKS refresh-on-unknown-kid and configurable accepted algorithms beyond RS256.
 5. Add policy decision API/listing UI for auditors.
+
+See `docs/IMPLEMENTATION_HANDOFF.md` for the current handoff summary, completed work, and remaining production-hardening items.
 
 ## Update Rules For Future Work
 
