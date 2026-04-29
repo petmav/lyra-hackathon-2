@@ -79,6 +79,96 @@ async def seed_all() -> None:
                     },
                 )
 
+        await _emit_history_events(run, script)
+
+
+async def _emit_history_events(run: dict[str, Any], script) -> None:
+    """Append the full per-step event trace for a seeded run into EVENTS.
+
+    Events go through `make_event` so the per-asset hash chain extends
+    correctly. Timestamps are overwritten in place so the seeded events
+    appear at the historical run's wall-clock times rather than 'now'."""
+    from praetor_api.services.event_stream import EVENTS, append_event, make_event
+
+    asset_id = script.asset_id
+    run_id = run["id"]
+
+    cursor = datetime.fromisoformat(run["triggered_at"])
+
+    started = make_event(
+        asset_id=asset_id,
+        workflow_run_id=run_id,
+        event_type="workflow.run.started",
+        actor="workflow_runtime",
+        payload={"workflow_id": script.workflow_id, "inputs": run["inputs"]},
+    )
+    started["ts"] = cursor.isoformat()
+    EVENTS.append(started)
+
+    for step in script.steps:
+        cursor += timedelta(milliseconds=400)
+        step_started = make_event(
+            asset_id=asset_id,
+            workflow_run_id=run_id,
+            workflow_step_id=step.step_id,
+            event_type="workflow.step.started",
+            actor="workflow_runtime",
+            payload={
+                "step": step.step_id,
+                "step_id": step.step_id,
+                "type": step.step_type,
+                "step_type": step.step_type,
+                "status": "running",
+            },
+        )
+        step_started["ts"] = cursor.isoformat()
+        EVENTS.append(step_started)
+
+        for scripted in step.events:
+            cursor += timedelta(milliseconds=600)
+            ev = make_event(
+                asset_id=asset_id,
+                workflow_run_id=run_id,
+                workflow_step_id=step.step_id,
+                event_type=scripted.type,
+                actor=scripted.actor,
+                payload=dict(scripted.payload)
+                | {"step_id": step.step_id, "step_type": step.step_type},
+            )
+            ev["ts"] = cursor.isoformat()
+            EVENTS.append(ev)
+
+        cursor += timedelta(milliseconds=400)
+        step_finished = make_event(
+            asset_id=asset_id,
+            workflow_run_id=run_id,
+            workflow_step_id=step.step_id,
+            event_type="workflow.step.finished",
+            actor="workflow_runtime",
+            payload={
+                "step": step.step_id,
+                "step_id": step.step_id,
+                "step_type": step.step_type,
+                "status": "succeeded",
+                "outputs_redacted": dict(step.final_outputs),
+            },
+        )
+        step_finished["ts"] = cursor.isoformat()
+        EVENTS.append(step_finished)
+
+    cursor += timedelta(milliseconds=400)
+    finished = make_event(
+        asset_id=asset_id,
+        workflow_run_id=run_id,
+        event_type="workflow.run.finished",
+        actor="workflow_runtime",
+        payload={"status": "succeeded"},
+    )
+    finished["ts"] = cursor.isoformat()
+    EVENTS.append(finished)
+
+    _ = append_event  # kept for symmetry with the simulator's emit path
+
 
 def _build_succeeded_run(
     run_id: str,
