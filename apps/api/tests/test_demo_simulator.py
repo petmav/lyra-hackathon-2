@@ -434,3 +434,33 @@ async def test_live_agent_step_skipped_when_no_key(monkeypatch) -> None:
     run = demo_workflows.RUNS[run_id]
     titles = [f["title"] for f in run["outputs"]["findings"]]
     assert titles == ["Scripted"]
+
+
+from praetor_api.services.demo_simulator import SCRIPTS
+
+
+def test_scripts_cover_all_six_workflows() -> None:
+    assert set(SCRIPTS.keys()) == {
+        "code_compliance_scan",
+        "code_compliance_scan_full",
+        "vendor_risk_review",
+        "policy_gap_analysis",
+        "evidence_collection",
+        "ai_system_intake",
+    }
+
+
+def test_only_full_scan_marks_a_step_as_live_agent() -> None:
+    for wf_id, script in SCRIPTS.items():
+        live_steps = [s.step_id for s in script.steps if s.is_live_agent]
+        if wf_id == "code_compliance_scan_full":
+            assert live_steps == ["scan"], f"{wf_id} should have exactly one live step"
+        else:
+            assert live_steps == [], f"{wf_id} must have no live steps"
+
+
+def test_each_script_step_has_step_id_and_step_type() -> None:
+    for script in SCRIPTS.values():
+        for step in script.steps:
+            assert step.step_id, f"empty step_id in {script.workflow_id}"
+            assert step.step_type, f"empty step_type in {script.workflow_id}/{step.step_id}"

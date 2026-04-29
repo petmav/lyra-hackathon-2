@@ -7,7 +7,7 @@ from praetor_api.db import AsyncSessionLocal
 from praetor_api.services.demo_workflows import (
     get_workflow,
     list_workflows,
-    run_code_compliance_scan,
+    run_workflow as run_demo_workflow,
     RUNS,
 )
 from praetor_api.services import production_workflows
@@ -22,6 +22,18 @@ class RunWorkflowRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     model_provider: str | None = None
     model: str | None = None
+    execution_mode: str | None = None
+
+
+class ScheduleWorkflowRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    continuous_monitoring: bool = False
+    recurrence: dict[str, Any] = Field(default_factory=dict)
+    model_provider: str | None = None
+    model: str | None = None
 
 
 class ResumeWorkflowRequest(BaseModel):
@@ -33,6 +45,10 @@ class DrainWorkflowRequest(BaseModel):
     limit: int = 1
     worker_id: str | None = None
     lease_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class TickSchedulesRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=100)
 
 
 class WorkflowGraphPayload(BaseModel):
@@ -144,7 +160,8 @@ async def run_workflow(workflow_id: str, request: RunWorkflowRequest) -> dict[st
         async with AsyncSessionLocal() as session:
             if await production_workflows.get_workflow(session, workflow_id) is None:
                 raise HTTPException(status_code=404, detail="workflow not found")
-            if settings.workflow_execution_mode == "queued":
+            execution_mode = request.execution_mode if request.execution_mode in {"sync", "queued"} else settings.workflow_execution_mode
+            if execution_mode == "queued":
                 run = await production_workflows.enqueue_workflow_run(
                     session,
                     workflow_id,
@@ -164,12 +181,46 @@ async def run_workflow(workflow_id: str, request: RunWorkflowRequest) -> dict[st
         if get_workflow(workflow_id) is None:
             raise HTTPException(status_code=404, detail="workflow not found")
 
-        run = await run_code_compliance_scan(
+        run = await run_demo_workflow(
+            workflow_id,
             request.inputs,
             model_provider=request.model_provider or settings.default_model_provider,
             model=request.model or settings.default_model_name,
         )
     return {"workflow_run_id": run["id"]}
+
+
+@router.post("/workflows/{workflow_id}:schedule")
+@router.post("/workflows/{workflow_id}/schedule")
+async def schedule_workflow(workflow_id: str, request: ScheduleWorkflowRequest) -> dict[str, Any]:
+    if get_settings().data_mode != "production":
+        raise HTTPException(status_code=400, detail="scheduling workflows requires production data mode")
+    try:
+        async with AsyncSessionLocal() as session:
+            scheduled = await production_workflows.configure_workflow_schedule(
+                session,
+                workflow_id,
+                inputs=request.inputs,
+                enabled=request.enabled,
+                continuous_monitoring=request.continuous_monitoring,
+                recurrence=request.recurrence,
+                model_provider=request.model_provider or get_settings().default_model_provider,
+                model=request.model or get_settings().default_model_name,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if scheduled is None:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return scheduled
+
+
+@router.post("/workflow-schedules:tick")
+async def tick_workflow_schedules(request: TickSchedulesRequest) -> dict[str, Any]:
+    if get_settings().data_mode != "production":
+        return {"created": [], "count": 0}
+    async with AsyncSessionLocal() as session:
+        created = await production_workflows.tick_workflow_schedules(session, limit=request.limit)
+    return {"created": created, "count": len(created)}
 
 
 @router.post("/workflow-runs:drain")

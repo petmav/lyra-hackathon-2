@@ -5,28 +5,47 @@ from praetor_api.main import app
 HEADERS = {"Authorization": "Bearer dev"}
 
 
-def test_code_compliance_scan_run_emits_finding() -> None:
+import asyncio
+
+
+def test_demo_run_starts_running_and_returns_a_run_id() -> None:
     client = TestClient(app)
     response = client.post(
-        "/workflows/code_compliance_scan:run",
+        "/workflows/vendor_risk_review:run",
         headers=HEADERS,
-        json={
-            "inputs": {"repo_url": "stub://support-bot"},
-            "model_provider": "anthropic",
-            "model": "claude-3-5-sonnet-latest",
-        },
+        json={"inputs": {"vendor": "Acme"}},
     )
-
     assert response.status_code == 200
     run_id = response.json()["workflow_run_id"]
 
-    run_response = client.get(f"/workflow-runs/{run_id}", headers=HEADERS)
-    assert run_response.status_code == 200
+    run = client.get(f"/workflow-runs/{run_id}", headers=HEADERS).json()
+    assert run["id"] == run_id
+    assert run["status"] in {"running", "succeeded"}
+    assert run["workflow_id"] == "vendor_risk_review"
+    assert isinstance(run["step_runs"], list) and len(run["step_runs"]) >= 1
 
-    run = run_response.json()
+
+def test_demo_run_completes_via_simulator_directly() -> None:
+    """Bypass the router so we can deterministically wait for completion."""
+    from praetor_api.services import demo_workflows
+
+    async def go() -> str:
+        run = await demo_workflows.run_workflow(
+            "code_compliance_scan",
+            inputs={"repo_url": "stub://support-bot"},
+            model_provider="openai",
+            model="gpt-4o-mini",
+            sync=True,
+            sleep=lambda _s: asyncio.sleep(0),
+        )
+        return run["id"]
+
+    run_id = asyncio.run(go())
+    from praetor_api.services.demo_workflows import RUNS
+
+    run = RUNS[run_id]
     assert run["status"] == "succeeded"
-    assert run["model_provider"] == "anthropic"
-    assert run["outputs"]["findings"][0]["severity"] == "high"
+    assert run["outputs"]["findings"], "scripted run should emit at least one finding"
 
 
 def test_demo_lists_all_six_workflows() -> None:

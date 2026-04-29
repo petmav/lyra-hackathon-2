@@ -422,3 +422,473 @@ def _chunk_rationale(text: str, *, n: int) -> list[str]:
         if chunk:
             chunks.append(chunk)
     return chunks[:n] if len(chunks) > n else chunks
+
+
+# ─── Scripted runs ────────────────────────────────────────────────────────
+
+
+def _thought(text: str, *, actor: str = "workflow_agent", delay: float = 0.6) -> ScriptedEvent:
+    return ScriptedEvent(type="agent.thought", actor=actor, payload={"text": text}, delay_before=delay)
+
+
+def _tool(name: str, *, args: dict[str, Any] | None = None, delay: float = 0.4) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="agent.tool.called",
+        actor="workflow_agent",
+        payload={"name": name, "args": args or {}},
+        delay_before=delay,
+    )
+
+
+def _hook_in(repo: str, *, delay: float = 0.4) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="hook.in.called",
+        actor="praetor:hooks",
+        payload={"repo_url": repo, "summary": f"Pulled artefacts from {repo}."},
+        delay_before=delay,
+    )
+
+
+def _corpus_query(query: str, corpus_id: str, chunks: int, *, delay: float = 0.4) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="corpus.query.called",
+        actor="praetor:corpus",
+        payload={"corpus_id": corpus_id, "query": query, "chunks_returned": chunks, "top_score": 0.78},
+        delay_before=delay,
+    )
+
+
+def _policy_decision(package: str, outcome: str, *, delay: float = 0.3) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="policy.decision.hot",
+        actor="praetor:policy",
+        payload={"package": package, "outcome": outcome, "latency_ms": 4},
+        delay_before=delay,
+    )
+
+
+def _human_gate(*, delay: float = 0.4) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="human.gate.opened",
+        actor="praetor:runtime",
+        payload={"reason": "awaiting reviewer approval"},
+        delay_before=delay,
+    )
+
+
+def _human_resolve(approver: str = "demo:reviewer", *, delay: float = 5.0) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="human.gate.resolved",
+        actor=approver,
+        payload={"approved": True, "approver": approver},
+        delay_before=delay,
+    )
+
+
+def _hook_out(target: str, *, delay: float = 0.6) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="hook.out.called",
+        actor="praetor:hooks",
+        payload={"target": target, "ok": True},
+        delay_before=delay,
+    )
+
+
+def _finding_emitted(finding: dict[str, Any], *, delay: float = 0.3) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="finding.emitted",
+        actor="workflow_runtime",
+        payload={"finding": finding},
+        delay_before=delay,
+    )
+
+
+def _change_proposed(proposal: dict[str, Any], *, delay: float = 0.4) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="change.proposed",
+        actor="workflow_runtime",
+        payload={"proposed_change": proposal},
+        delay_before=delay,
+    )
+
+
+def _f(
+    *,
+    fid: str,
+    title: str,
+    description: str,
+    severity: str = "high",
+    confidence: float = 0.85,
+    obligations: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    return {
+        "id": fid,
+        "urn": f"urn:praetor:finding:demo:{fid}",
+        "title": title,
+        "description": description,
+        "severity": severity,
+        "confidence": confidence,
+        "obligations_cited": list(obligations),
+        "documents_cited": [],
+        "status": "open",
+    }
+
+
+def _p(*, pid: str, finding_id: str, kind: str, diff: str, residual: str = "Low") -> dict[str, Any]:
+    return {
+        "id": pid,
+        "urn": f"urn:praetor:proposed_change:demo:{pid}",
+        "finding_id": finding_id,
+        "kind": kind,
+        "diff_format": "unified" if kind == "code" else "markdown",
+        "diff": diff,
+        "obligations_addressed": [],
+        "residual_risk_estimate": residual,
+        "status": "proposed",
+    }
+
+
+_SCAN_F = _f(
+    fid="fnd_send_email_guard",
+    title="send_email lacks recipient domain validation",
+    description="The send_email path forwards messages without checking the recipient domain against an allowlist.",
+    severity="high",
+    confidence=0.9,
+    obligations=("urn:praetor:obligation:demo:iso-42001-8-3",),
+)
+_SCAN_P = _p(
+    pid="pc_send_email_validator",
+    finding_id="fnd_send_email_guard",
+    kind="code",
+    diff=(
+        "--- a/tools.py\n"
+        "+++ b/tools.py\n"
+        "@@\n"
+        "+ALLOWED = {'northwind.test', 'customer.example'}\n"
+        " def send_email(recipient, subject, body):\n"
+        "+    assert recipient.rsplit('@', 1)[-1] in ALLOWED\n"
+        "     return smtp.send(recipient, subject, body)\n"
+    ),
+)
+
+
+SCRIPTS: dict[str, ScriptedRun] = {
+    "code_compliance_scan": ScriptedRun(
+        workflow_id="code_compliance_scan",
+        asset_id="asset_northwind_support_bot",
+        steps=(
+            ScriptedStep(
+                step_id="pull",
+                step_type="hook.in",
+                events=(_hook_in("stub://support-bot"),),
+                final_outputs={"repo_url": "stub://support-bot"},
+            ),
+            ScriptedStep(
+                step_id="retrieve_controls",
+                step_type="corpus.query",
+                events=(_corpus_query("recipient domain validation", "iso_42001", chunks=3),),
+                final_outputs={"chunks_returned": 3},
+            ),
+            ScriptedStep(
+                step_id="scan",
+                step_type="agent",
+                events=(
+                    _thought("Reading source files for outbound email primitives."),
+                    _thought("send_email accepts arbitrary recipients with no allowlist check."),
+                    _tool("emit_finding", args={"count": 1}),
+                ),
+                final_outputs={"findings": [_SCAN_F]},
+                findings=(_SCAN_F,),
+            ),
+            ScriptedStep(
+                step_id="emit",
+                step_type="finding.emit",
+                events=(_finding_emitted(_SCAN_F),),
+                final_outputs={"emitted": [_SCAN_F]},
+            ),
+        ),
+    ),
+    "code_compliance_scan_full": ScriptedRun(
+        workflow_id="code_compliance_scan_full",
+        asset_id="asset_northwind_support_bot",
+        steps=(
+            ScriptedStep(
+                step_id="pull",
+                step_type="hook.in",
+                events=(_hook_in("stub://support-bot"),),
+                final_outputs={"repo_url": "stub://support-bot"},
+            ),
+            ScriptedStep(
+                step_id="retrieve_controls",
+                step_type="corpus.query",
+                events=(_corpus_query("recipient domain validation", "iso_42001", chunks=3),),
+                final_outputs={"chunks_returned": 3},
+            ),
+            ScriptedStep(
+                step_id="scan",
+                step_type="agent",
+                events=(
+                    _thought("Inspecting outbound integrations and policy obligations."),
+                    _thought("send_email is missing the recipient-domain guard required by ISO 42001 §8.3."),
+                    _tool("emit_finding", args={"count": 1}),
+                ),
+                final_outputs={"findings": [_SCAN_F]},
+                findings=(_SCAN_F,),
+                is_live_agent=True,
+            ),
+            ScriptedStep(
+                step_id="emit",
+                step_type="finding.emit",
+                events=(_finding_emitted(_SCAN_F),),
+                final_outputs={"emitted": [_SCAN_F]},
+            ),
+            ScriptedStep(
+                step_id="propose",
+                step_type="change.propose",
+                events=(_change_proposed(_SCAN_P),),
+                final_outputs={"proposed": [_SCAN_P]},
+                proposals=(_SCAN_P,),
+            ),
+            ScriptedStep(
+                step_id="policy_gate",
+                step_type="gate.policy",
+                events=(_policy_decision("praetor.controls.workflow_findings_gate", "allow"),),
+                final_outputs={"outcome": "allow"},
+            ),
+            ScriptedStep(
+                step_id="human_gate",
+                step_type="gate.human",
+                events=(_human_gate(), _human_resolve(delay=4.0)),
+                final_outputs={"approved": True},
+            ),
+            ScriptedStep(
+                step_id="open_pr",
+                step_type="hook.out",
+                events=(_hook_out("github_stub#open_pr"),),
+                final_outputs={"pr_url": "https://github.example/northwind/support-bot/pull/42"},
+            ),
+        ),
+    ),
+    "vendor_risk_review": ScriptedRun(
+        workflow_id="vendor_risk_review",
+        asset_id="asset_acme_vendor",
+        steps=(
+            ScriptedStep(
+                step_id="load_attestation",
+                step_type="hook.in",
+                events=(_hook_in("stub://acme-soc2-attestation"),),
+                final_outputs={"document": "soc2-2026-q1.pdf"},
+            ),
+            ScriptedStep(
+                step_id="retrieve_obligations",
+                step_type="corpus.query",
+                events=(_corpus_query("SOC2 access control gaps", "iso_42001", chunks=4),),
+                final_outputs={"chunks_returned": 4},
+            ),
+            ScriptedStep(
+                step_id="analyze",
+                step_type="agent",
+                events=(
+                    _thought("Cross-checking Acme's SOC2 controls against ISO 42001."),
+                    _thought("CC6.1 access logging is partial; A.9.4.5 lacks segregation evidence."),
+                    _tool("cite_obligation", args={"count": 2}),
+                    _tool("emit_finding", args={"count": 2}),
+                ),
+                final_outputs={"findings_count": 2},
+                findings=(
+                    _f(
+                        fid="fnd_acme_cc61",
+                        title="Acme SOC2 CC6.1 — partial access logging",
+                        description="Acme's evidence does not cover privileged user access. Request a remediation plan.",
+                        severity="high",
+                        confidence=0.82,
+                        obligations=("urn:praetor:obligation:demo:soc2-cc6-1",),
+                    ),
+                    _f(
+                        fid="fnd_acme_a945",
+                        title="ISO 27001 A.9.4.5 segregation evidence missing",
+                        description="No artefact demonstrates code-environment segregation for production releases.",
+                        severity="medium",
+                        confidence=0.74,
+                        obligations=("urn:praetor:obligation:demo:iso-27001-a945",),
+                    ),
+                ),
+            ),
+            ScriptedStep(
+                step_id="emit",
+                step_type="finding.emit",
+                events=(),
+                final_outputs={"emitted_count": 2},
+            ),
+            ScriptedStep(
+                step_id="propose_remediation",
+                step_type="change.propose",
+                events=(),
+                final_outputs={"proposed_count": 1},
+                proposals=(
+                    _p(
+                        pid="pc_acme_remediation",
+                        finding_id="fnd_acme_cc61",
+                        kind="process",
+                        diff="Request a 30-day remediation plan covering CC6.1 access logging gaps; require evidence by next quarter's review.",
+                        residual="Medium until evidence is supplied.",
+                    ),
+                ),
+            ),
+        ),
+    ),
+    "policy_gap_analysis": ScriptedRun(
+        workflow_id="policy_gap_analysis",
+        asset_id="asset_policy_corpus",
+        steps=(
+            ScriptedStep(
+                step_id="load_regulation",
+                step_type="hook.in",
+                events=(_hook_in("stub://eu-ai-act-art10"),),
+                final_outputs={"regulation": "eu_ai_act_art_10"},
+            ),
+            ScriptedStep(
+                step_id="retrieve_existing_controls",
+                step_type="corpus.query",
+                events=(_corpus_query("data governance training data quality", "internal_data_min", chunks=5),),
+                final_outputs={"chunks_returned": 5},
+            ),
+            ScriptedStep(
+                step_id="analyze_gaps",
+                step_type="agent",
+                events=(
+                    _thought("Mapping existing controls onto AI Act Article 10 obligations."),
+                    _thought("Existing controls cover bias monitoring; data lineage attestation is missing."),
+                    _tool("emit_finding", args={"count": 1}),
+                ),
+                final_outputs={"gaps": 1},
+                findings=(
+                    _f(
+                        fid="fnd_eu_ai_act_lineage",
+                        title="No data-lineage attestation for training datasets",
+                        description="Article 10(2)(f) requires data lineage. Internal controls cover bias but not lineage attestation.",
+                        severity="high",
+                        confidence=0.81,
+                        obligations=("urn:praetor:obligation:demo:eu-ai-act-art10",),
+                    ),
+                ),
+            ),
+            ScriptedStep(
+                step_id="emit",
+                step_type="finding.emit",
+                events=(),
+                final_outputs={"emitted_count": 1},
+            ),
+            ScriptedStep(
+                step_id="propose_controls",
+                step_type="change.propose",
+                events=(),
+                final_outputs={"proposed_count": 1},
+                proposals=(
+                    _p(
+                        pid="pc_data_lineage_control",
+                        finding_id="fnd_eu_ai_act_lineage",
+                        kind="policy",
+                        diff="## Control: Training-Data Lineage Attestation\n\nEvery training dataset MUST carry a signed lineage attestation linking source systems, transformation steps, and consent basis.",
+                    ),
+                ),
+            ),
+            ScriptedStep(
+                step_id="policy_gate",
+                step_type="gate.policy",
+                events=(_policy_decision("praetor.controls.policy_gate", "allow"),),
+                final_outputs={"outcome": "allow"},
+            ),
+            ScriptedStep(
+                step_id="human_gate",
+                step_type="gate.human",
+                events=(_human_gate(), _human_resolve(delay=4.0)),
+                final_outputs={"approved": True},
+            ),
+        ),
+    ),
+    "evidence_collection": ScriptedRun(
+        workflow_id="evidence_collection",
+        asset_id="asset_evidence_q1",
+        steps=(
+            ScriptedStep(
+                step_id="read_files",
+                step_type="hook.in",
+                events=(_hook_in("stub://evidence-bundle-q1"),),
+                final_outputs={"files": 14},
+            ),
+            ScriptedStep(
+                step_id="retrieve_obligations",
+                step_type="corpus.query",
+                events=(_corpus_query("ISO 42001 evidence requirements", "iso_42001", chunks=4),),
+                final_outputs={"chunks_returned": 4},
+            ),
+            ScriptedStep(
+                step_id="organize",
+                step_type="agent",
+                events=(
+                    _thought("Sorting raw artefacts by obligation URN."),
+                    _thought("6 evidence records bound; 8 artefacts uncategorised — flagged for review."),
+                    _tool("bind_evidence", args={"bound": 6, "unbound": 8}),
+                ),
+                final_outputs={"records_created": 6},
+            ),
+            ScriptedStep(
+                step_id="emit",
+                step_type="finding.emit",
+                events=(),
+                final_outputs={"emitted_count": 0},
+            ),
+        ),
+    ),
+    "ai_system_intake": ScriptedRun(
+        workflow_id="ai_system_intake",
+        asset_id="asset_chat_summary_v2",
+        steps=(
+            ScriptedStep(
+                step_id="intake_form",
+                step_type="hook.in",
+                events=(_hook_in("stub://intake/chat-summary-v2"),),
+                final_outputs={"form_id": "intake_chat_summary_v2"},
+            ),
+            ScriptedStep(
+                step_id="retrieve_obligations",
+                step_type="corpus.query",
+                events=(_corpus_query("AI system risk classification", "iso_42001", chunks=3),),
+                final_outputs={"chunks_returned": 3},
+            ),
+            ScriptedStep(
+                step_id="classify",
+                step_type="agent",
+                events=(
+                    _thought("Reviewing intake form against AI Act risk categories."),
+                    _thought("Customer-facing summary tool with PII access — classified high-risk."),
+                    _tool("emit_finding", args={"count": 1}),
+                ),
+                final_outputs={"classification": "high-risk"},
+                findings=(
+                    _f(
+                        fid="fnd_chat_summary_classification",
+                        title="Chat-summary v2 classified high-risk",
+                        description="Customer-facing summarisation that accesses PII. Subject to AI Act high-risk obligations (Annex III).",
+                        severity="high",
+                        confidence=0.88,
+                        obligations=("urn:praetor:obligation:demo:eu-ai-act-annex-iii",),
+                    ),
+                ),
+            ),
+            ScriptedStep(
+                step_id="policy_gate",
+                step_type="gate.policy",
+                events=(_policy_decision("praetor.controls.intake_gate", "permit_with_conditions"),),
+                final_outputs={"outcome": "permit_with_conditions"},
+            ),
+            ScriptedStep(
+                step_id="emit",
+                step_type="finding.emit",
+                events=(),
+                final_outputs={"emitted_count": 1},
+            ),
+        ),
+    ),
+}

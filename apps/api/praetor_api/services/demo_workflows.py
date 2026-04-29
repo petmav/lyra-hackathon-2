@@ -1,8 +1,10 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from praetor_api.services.event_stream import append_event, make_event
+from praetor_api.settings import get_settings
 
 RUNS: dict[str, dict[str, Any]] = {}
 
@@ -83,162 +85,78 @@ def get_workflow(workflow_id: str) -> dict[str, Any] | None:
     return None
 
 
-async def run_code_compliance_scan(
+async def run_workflow(
+    workflow_id: str,
     inputs: dict[str, Any],
     *,
     model_provider: str = "openai",
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
+    sync: bool = False,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
+    """Create a demo run and schedule the simulator.
+
+    Returns the initial run dict with `status="running"` immediately.
+    Caller is the FastAPI route in `routers/workflows.py`. When `sync=True`,
+    awaits the simulator inline and returns the terminal run (used by tests).
+    """
+    from praetor_api.services.demo_simulator import SCRIPTS, tick_run
+
+    if workflow_id not in SCRIPTS:
+        for wf in WORKFLOWS:
+            if wf["urn"] == workflow_id:
+                workflow_id = wf["id"]
+                break
+
+    script = SCRIPTS.get(workflow_id)
+    if script is None:
+        raise KeyError(workflow_id)
+
     run_id = f"wfr_{uuid4().hex[:12]}"
     now = datetime.now(UTC).isoformat()
-    finding = {
-        "id": f"fnd_{uuid4().hex[:12]}",
-        "title": "send_email lacks recipient domain validation",
-        "description": "The Northwind support-bot can send email to arbitrary recipient domains.",
-        "severity": "high",
-        "confidence": 0.92,
-        "obligations_cited": [
-            "urn:praetor:obligation:demo:iso-42001-8-3",
-            "urn:praetor:obligation:demo:internal-data-min",
-        ],
-        "documents_cited": [],
-        "status": "open",
-    }
     run = {
         "id": run_id,
-        "workflow_id": CODE_COMPLIANCE_SCAN["id"],
-        "status": "succeeded",
+        "urn": f"urn:praetor:workflow-run:{run_id}",
+        "workflow_id": workflow_id,
+        "asset_id": script.asset_id,
+        "status": "running",
         "triggered_by": "api",
         "triggered_at": now,
-        "inputs": inputs,
+        "created_at": now,
+        "updated_at": now,
+        "started_at": now,
+        "finished_at": None,
+        "inputs": dict(inputs),
         "model_provider": model_provider,
         "model": model,
-        "outputs": {"findings": [finding]},
+        "outputs": {"findings": [], "proposed_changes": []},
         "step_runs": [
             {
-                "step_id": "pull",
-                "step_type": "hook.in",
-                "status": "succeeded",
-                "outputs_redacted": {"repo_url": inputs.get("repo_url", "stub://support-bot")},
-            },
-            {
-                "step_id": "scan",
-                "step_type": "agent",
-                "status": "succeeded",
-                "model_provider": model_provider,
-                "model": model,
-                "outputs_redacted": {"findings": [finding]},
-            },
-            {
-                "step_id": "emit",
-                "step_type": "finding.emit",
-                "status": "succeeded",
-                "outputs_redacted": {"count": 1},
-            },
+                "step_id": step.step_id,
+                "step_type": step.step_type,
+                "status": "pending",
+                "outputs_redacted": {},
+                "model_provider": model_provider if step.step_type == "agent" else None,
+                "model": model if step.step_type == "agent" else None,
+            }
+            for step in script.steps
         ],
     }
     RUNS[run_id] = run
-    asset_id = "asset_northwind_support_bot"
-    await append_event(
-        make_event(
-            asset_id=asset_id,
-            workflow_run_id=run_id,
-            event_type="workflow.run.started",
-            actor="workflow_runtime",
-            payload={"workflow_id": CODE_COMPLIANCE_SCAN["id"], "inputs": inputs},
+
+    settings = get_settings()
+    api_key = settings.openai_api_key
+
+    if sync:
+        await tick_run(
+            run_id,
+            script=script,
+            sleep=sleep or asyncio.sleep,
+            openai_api_key=api_key,
         )
-    )
-    for step in run["step_runs"]:
-        await _append_step_trace(asset_id, run_id, step)
-    await append_event(
-        make_event(
-            asset_id=asset_id,
-            workflow_run_id=run_id,
-            event_type="workflow.run.finished",
-            actor="workflow_runtime",
-            payload={"status": run["status"]},
-        )
+        return RUNS[run_id]
+
+    asyncio.create_task(
+        tick_run(run_id, script=script, openai_api_key=api_key)
     )
     return run
-
-
-async def _append_step_trace(asset_id: str, run_id: str, step: dict[str, Any]) -> None:
-    await append_event(
-        make_event(
-            asset_id=asset_id,
-            workflow_run_id=run_id,
-            workflow_step_id=step["step_id"],
-            event_type="workflow.step.started",
-            actor="workflow_runtime",
-            payload={
-                "step_id": step["step_id"],
-                "step_type": step["step_type"],
-                "status": "running",
-            },
-        )
-    )
-    for event_type, actor, payload in _demo_step_trace_events(step):
-        await append_event(
-            make_event(
-                asset_id=asset_id,
-                workflow_run_id=run_id,
-                workflow_step_id=step["step_id"],
-                event_type=event_type,
-                actor=actor,
-                payload=payload | {"step_id": step["step_id"], "step_type": step["step_type"]},
-            )
-        )
-    await append_event(
-        make_event(
-            asset_id=asset_id,
-            workflow_run_id=run_id,
-            workflow_step_id=step["step_id"],
-            event_type="workflow.step.finished",
-            actor="workflow_runtime",
-            payload={
-                "step_id": step["step_id"],
-                "step_type": step["step_type"],
-                "status": step["status"],
-                "outputs_redacted": step["outputs_redacted"],
-            },
-        )
-    )
-
-
-def _demo_step_trace_events(step: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
-    outputs = step.get("outputs_redacted") or {}
-    if step["step_type"] == "hook.in":
-        return [
-            (
-                "hook.in.called",
-                "praetor:hooks",
-                {"repo_url": outputs.get("repo_url"), "summary": "Loaded source artefacts through the inbound hook."},
-            )
-        ]
-    if step["step_type"] == "agent":
-        findings = outputs.get("findings", [])
-        return [
-            (
-                "agent.thought",
-                "workflow_agent",
-                {
-                    "text": "Reviewed source artefacts and policy obligations; produced structured findings.",
-                    "findings_count": len(findings) if isinstance(findings, list) else 0,
-                },
-            ),
-            (
-                "agent.tool.called",
-                "workflow_agent",
-                {"name": "emit_finding", "status": "ok", "items": len(findings) if isinstance(findings, list) else 0},
-            ),
-        ]
-    if step["step_type"] == "finding.emit":
-        emitted = outputs.get("emitted") or []
-        if not emitted and "count" in outputs:
-            emitted = [{"count": outputs["count"]}]
-        return [
-            ("finding.emitted", "workflow_runtime", {"finding": item})
-            for item in emitted
-            if isinstance(item, dict)
-        ]
-    return []
