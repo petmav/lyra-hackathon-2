@@ -123,13 +123,51 @@ export default function WorkflowRunPage({ params }: { params: Promise<{ id: stri
         aside={
           <div className="flex flex-col items-end gap-2">
             <span className="inline-flex items-center gap-2">
-              <StatusDot tone={run.status === "running" ? "gold" : "neutral"} live={run.status === "running"} />
+              <StatusDot
+                tone={
+                  run.status === "running"
+                    ? "gold"
+                    : run.status === "awaiting_approval"
+                    ? "warn"
+                    : run.status === "failed" || run.status === "cancelled"
+                    ? "crit"
+                    : run.status === "succeeded"
+                    ? "ok"
+                    : "neutral"
+                }
+                live={run.status === "running" || run.status === "awaiting_approval"}
+              />
               <span className="font-mono text-[12px] text-paper">{run.status}</span>
             </span>
             <Urn urn={run.urn} />
             <div className="flex gap-2">
-              <Button size="sm" variant="ghost">re-run</Button>
-              {run.status === "running" && <Button size="sm" variant="danger">cancel</Button>}
+              {run.status === "awaiting_approval" ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={async () => {
+                      await api.workflowRuns.resume(run.id, true);
+                    }}
+                  >
+                    approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={async () => {
+                      await api.workflowRuns.resume(run.id, false);
+                    }}
+                  >
+                    reject
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button size="sm" variant="ghost">re-run</Button>
+                  {run.status === "running" && <Button size="sm" variant="danger">cancel</Button>}
+                </>
+              )}
             </div>
           </div>
         }

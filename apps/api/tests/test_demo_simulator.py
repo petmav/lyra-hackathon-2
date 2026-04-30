@@ -134,7 +134,10 @@ async def test_tick_run_advances_a_one_step_run_to_succeeded() -> None:
     run = demo_workflows.RUNS[run_id]
     assert run["status"] == "succeeded"
     assert run["step_runs"][0]["status"] == "succeeded"
-    assert run["step_runs"][0]["outputs_redacted"] == {"organized": 6}
+    outputs = run["step_runs"][0]["outputs_redacted"]
+    assert outputs["organized"] == 6
+    # agent steps also stamp workflow_agent identifiers
+    assert outputs["workflow_agent_asset_id"].startswith("asset_wfa_")
 
 
 @pytest.mark.asyncio

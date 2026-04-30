@@ -304,16 +304,35 @@ export const api = {
       const fixture = fxWorkflows.find((w) => w.id === id || w.urn === id);
       return fixture ? normalizeWorkflow({ ...fixture }) : null;
     },
-    async run(id: string, inputs: Record<string, unknown>): Promise<{ workflow_run_id: string }> {
+    async run(
+      id: string,
+      inputs: Record<string, unknown>,
+      options: { execution_mode?: "sync" | "queued"; model_provider?: string; model?: string } = {}
+    ): Promise<{ workflow_run_id: string }> {
       if (USE_API) {
         return request<{ workflow_run_id: string }>(`/workflows/${encodeURIComponent(id)}:run`, {
           method: "POST",
-          body: JSON.stringify({ inputs })
+          body: JSON.stringify({ inputs, ...options })
         });
       }
       await sleep();
       // demo: returns the existing running run id
       return { workflow_run_id: "wfr_2026_04_28_001" };
+    },
+    async schedule(id: string, payload: {
+      inputs: Record<string, unknown>;
+      enabled: boolean;
+      continuous_monitoring: boolean;
+      recurrence: Record<string, unknown>;
+      model_provider?: string;
+      model?: string;
+    }): Promise<Workflow> {
+      if (!USE_API) throw new Error("Scheduling workflows requires the API data source.");
+      const row = await request<Record<string, unknown>>(`/workflows/${encodeURIComponent(id)}:schedule`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      return normalizeWorkflow(row);
     },
     async create(payload: {
       name: string;
@@ -387,6 +406,21 @@ export const api = {
     },
     async cancel(_id: string): Promise<void> {
       await sleep();
+    },
+    async resume(id: string, approved: boolean): Promise<WorkflowRun | null> {
+      if (!USE_API) return null;
+      try {
+        const row = await request<Record<string, unknown>>(
+          `/workflow-runs/${encodeURIComponent(id)}:resume`,
+          {
+            method: "POST",
+            body: JSON.stringify({ approved, approver: "demo:reviewer" })
+          }
+        );
+        return normalizeWorkflowRun(row);
+      } catch {
+        return null;
+      }
     }
   },
 

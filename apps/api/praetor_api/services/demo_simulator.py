@@ -73,6 +73,26 @@ logger = logging.getLogger(__name__)
 SleepFn = Callable[[float], Awaitable[None]]
 
 
+# ─── human-gate pause registry ────────────────────────────────────────────
+# Per-run asyncio.Event used by `tick_run` to block on a `gate.human` step
+# until the API receives `POST /workflow-runs/{id}:resume`. The router
+# imports `signal_resume` to flip the event.
+
+_GATE_EVENTS: dict[str, asyncio.Event] = {}
+_GATE_DECISIONS: dict[str, bool] = {}
+
+
+def signal_resume(run_id: str, *, approved: bool) -> bool:
+    """Mark the run's pending human gate as resolved. Returns True if a
+    matching pause was registered, False otherwise."""
+    event = _GATE_EVENTS.get(run_id)
+    if event is None:
+        return False
+    _GATE_DECISIONS[run_id] = approved
+    event.set()
+    return True
+
+
 async def tick_run(
     run_id: str,
     *,
@@ -95,6 +115,16 @@ async def tick_run(
 
     asset_id = script.asset_id
 
+    def _agent_asset_id(step: ScriptedStep) -> str:
+        """Per-step workflow_agent asset id.
+
+        The workflow-run page synthesises an asset for each agent step
+        (`asset_wfa_<run>_<step>`) and the SelfGovernancePanel queries
+        events by that id. Tag agent in-step events with it so the
+        three-pane panel actually shows thoughts / tools / memory.
+        """
+        return f"asset_wfa_{run_id}_{step.step_id}"
+
     try:
         await append_event(
             make_event(
@@ -110,6 +140,84 @@ async def tick_run(
             step_record = _find_step_record(run, step.step_id)
             if step_record is None:
                 continue
+
+            # Human gate: pause the run, wait for the API to signal resume.
+            if step.step_type == "gate.human":
+                step_record["status"] = "awaiting_approval"
+                run["status"] = "awaiting_approval"
+                run["updated_at"] = _iso_now()
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="human.gate.opened",
+                        actor="praetor:runtime",
+                        payload={
+                            "reason": "awaiting reviewer approval",
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                        },
+                    )
+                )
+                event = asyncio.Event()
+                _GATE_EVENTS[run_id] = event
+                try:
+                    await event.wait()
+                finally:
+                    _GATE_EVENTS.pop(run_id, None)
+                approved = _GATE_DECISIONS.pop(run_id, True)
+                run["status"] = "running"
+                step_record["status"] = "succeeded" if approved else "failed"
+                run["updated_at"] = _iso_now()
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="human.gate.resolved",
+                        actor="demo:reviewer",
+                        payload={
+                            "approved": approved,
+                            "approver": "demo:reviewer",
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                        },
+                    )
+                )
+                step_record["outputs_redacted"] = {"approved": approved}
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="workflow.step.finished",
+                        actor="workflow_runtime",
+                        payload={
+                            "step": step.step_id,
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                            "status": step_record["status"],
+                            "outputs_redacted": step_record["outputs_redacted"],
+                        },
+                    )
+                )
+                if not approved:
+                    run["status"] = "cancelled"
+                    run["finished_at"] = _iso_now()
+                    run["updated_at"] = run["finished_at"]
+                    await append_event(
+                        make_event(
+                            asset_id=asset_id,
+                            workflow_run_id=run_id,
+                            event_type="workflow.run.finished",
+                            actor="workflow_runtime",
+                            payload={"status": "cancelled"},
+                        )
+                    )
+                    return
+                continue
+
             step_record["status"] = "running"
             run["updated_at"] = _iso_now()
 
@@ -133,7 +241,7 @@ async def tick_run(
             live_findings: list[dict[str, Any]] | None = None
             if step.is_live_agent and openai_api_key:
                 live_findings = await _emit_live_openai_thoughts(
-                    asset_id=asset_id,
+                    asset_id=_agent_asset_id(step),
                     run_id=run_id,
                     step=step,
                     inputs=run.get("inputs", {}),
@@ -150,9 +258,18 @@ async def tick_run(
                 for scripted in step.events:
                     if scripted.delay_before > 0:
                         await sleep(scripted.delay_before)
+                    # Agent in-step events are tagged with the workflow_agent
+                    # asset id so the three-pane SelfGovernancePanel renders
+                    # them; everything else stays on the run's main asset.
+                    event_asset_id = (
+                        _agent_asset_id(step)
+                        if step.step_type == "agent"
+                        and scripted.type.startswith(("agent.", "sandbox."))
+                        else asset_id
+                    )
                     await append_event(
                         make_event(
-                            asset_id=asset_id,
+                            asset_id=event_asset_id,
                             workflow_run_id=run_id,
                             workflow_step_id=step.step_id,
                             event_type=scripted.type,
@@ -164,6 +281,16 @@ async def tick_run(
                 step_record["outputs_redacted"] = dict(step.final_outputs)
             else:
                 step_record["outputs_redacted"] = {"findings": list(live_findings), "live": True}
+
+            if step.step_type == "agent":
+                # Surface the workflow_agent asset id on the step so
+                # workflowAgentFromRun on the run page renders the
+                # SelfGovernancePanel against the right asset.
+                wfa_id = _agent_asset_id(step)
+                step_record["outputs_redacted"]["workflow_agent_asset_id"] = wfa_id
+                step_record["outputs_redacted"]["workflow_agent_asset_urn"] = (
+                    f"urn:praetor:asset:workflow_agent:{run_id}:{step.step_id}"
+                )
 
             step_record["status"] = "succeeded"
             run["updated_at"] = _iso_now()
@@ -507,6 +634,15 @@ def _finding_emitted(finding: dict[str, Any], *, delay: float = 0.8) -> Scripted
     )
 
 
+def _memory(key: str, *, taint: float = 0.05, provenance: str = "corpus", delay: float = 0.8) -> ScriptedEvent:
+    return ScriptedEvent(
+        type="agent.memory.write",
+        actor="workflow_agent",
+        payload={"key": key, "taint_score": taint, "provenance": provenance},
+        delay_before=delay,
+    )
+
+
 def _change_proposed(proposal: dict[str, Any], *, delay: float = 1.0) -> ScriptedEvent:
     return ScriptedEvent(
         type="change.proposed",
@@ -598,7 +734,9 @@ SCRIPTS: dict[str, ScriptedRun] = {
                 step_type="agent",
                 events=(
                     _thought("Reading source files for outbound email primitives."),
+                    _memory("source.tools.send_email", provenance="repo://support-bot/tools.py"),
                     _thought("send_email accepts arbitrary recipients with no allowlist check."),
+                    _memory("obligation.iso-42001-8-3", taint=0.0, provenance="corpus://iso_42001#8.3"),
                     _tool("emit_finding", args={"count": 1}),
                 ),
                 final_outputs={"findings": [_SCAN_F]},
@@ -633,7 +771,9 @@ SCRIPTS: dict[str, ScriptedRun] = {
                 step_type="agent",
                 events=(
                     _thought("Inspecting outbound integrations and policy obligations."),
+                    _memory("source.tools.send_email", provenance="repo://support-bot/tools.py"),
                     _thought("send_email is missing the recipient-domain guard required by ISO 42001 §8.3."),
+                    _memory("obligation.iso-42001-8-3", taint=0.0, provenance="corpus://iso_42001#8.3"),
                     _tool("emit_finding", args={"count": 1}),
                 ),
                 final_outputs={"findings": [_SCAN_F]},
@@ -694,7 +834,9 @@ SCRIPTS: dict[str, ScriptedRun] = {
                 step_type="agent",
                 events=(
                     _thought("Cross-checking Acme's SOC2 controls against ISO 42001."),
+                    _memory("vendor.acme.soc2.cc6-1", provenance="hook://acme-attestation"),
                     _thought("CC6.1 access logging is partial; A.9.4.5 lacks segregation evidence."),
+                    _memory("vendor.acme.iso27001.a945", provenance="corpus://iso_42001"),
                     _tool("cite_obligation", args={"count": 2}),
                     _tool("emit_finding", args={"count": 2}),
                 ),
@@ -762,7 +904,9 @@ SCRIPTS: dict[str, ScriptedRun] = {
                 step_type="agent",
                 events=(
                     _thought("Mapping existing controls onto AI Act Article 10 obligations."),
+                    _memory("regulation.eu_ai_act.art10", provenance="corpus://eu-ai-act"),
                     _thought("Existing controls cover bias monitoring; data lineage attestation is missing."),
+                    _memory("control.gap.data_lineage", provenance="corpus://internal_data_min"),
                     _tool("emit_finding", args={"count": 1}),
                 ),
                 final_outputs={"gaps": 1},
@@ -832,7 +976,9 @@ SCRIPTS: dict[str, ScriptedRun] = {
                 step_type="agent",
                 events=(
                     _thought("Sorting raw artefacts by obligation URN."),
+                    _memory("evidence.q1.bundle", provenance="hook://evidence-q1"),
                     _thought("6 evidence records bound; 8 artefacts uncategorised — flagged for review."),
+                    _memory("evidence.q1.bound_count", provenance="agent.organize"),
                     _tool("bind_evidence", args={"bound": 6, "unbound": 8}),
                 ),
                 final_outputs={"records_created": 6},
@@ -866,7 +1012,9 @@ SCRIPTS: dict[str, ScriptedRun] = {
                 step_type="agent",
                 events=(
                     _thought("Reviewing intake form against AI Act risk categories."),
+                    _memory("intake.chat-summary-v2.form", provenance="hook://intake"),
                     _thought("Customer-facing summary tool with PII access — classified high-risk."),
+                    _memory("classification.high-risk", provenance="agent.classify"),
                     _tool("emit_finding", args={"count": 1}),
                 ),
                 final_outputs={"classification": "high-risk"},

@@ -126,8 +126,14 @@ async def _emit_history_events(run: dict[str, Any], script) -> None:
 
         for scripted in step.events:
             cursor += timedelta(milliseconds=600)
+            event_asset_id = (
+                f"asset_wfa_{run_id}_{step.step_id}"
+                if step.step_type == "agent"
+                and scripted.type.startswith(("agent.", "sandbox."))
+                else asset_id
+            )
             ev = make_event(
-                asset_id=asset_id,
+                asset_id=event_asset_id,
                 workflow_run_id=run_id,
                 workflow_step_id=step.step_id,
                 event_type=scripted.type,
@@ -180,12 +186,18 @@ def _build_succeeded_run(
     for i, step in enumerate(script.steps):
         step_started = cursor
         cursor = cursor + timedelta(seconds=2)
+        outputs_redacted = dict(step.final_outputs)
+        if step.step_type == "agent":
+            outputs_redacted["workflow_agent_asset_id"] = f"asset_wfa_{run_id}_{step.step_id}"
+            outputs_redacted["workflow_agent_asset_urn"] = (
+                f"urn:praetor:asset:workflow_agent:{run_id}:{step.step_id}"
+            )
         step_runs.append(
             {
                 "step_id": step.step_id,
                 "step_type": step.step_type,
                 "status": "succeeded",
-                "outputs_redacted": dict(step.final_outputs),
+                "outputs_redacted": outputs_redacted,
                 "depends_on": [script.steps[i - 1].step_id] if i > 0 else [],
                 "started_at": step_started.isoformat(),
                 "finished_at": cursor.isoformat(),

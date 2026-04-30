@@ -264,6 +264,15 @@ async def resume_workflow(run_id: str, request: ResumeWorkflowRequest) -> dict[s
         run = RUNS[run_id]
     except KeyError:
         raise HTTPException(status_code=404, detail="workflow run not found") from None
+
+    from praetor_api.services.demo_simulator import signal_resume
+
+    if signal_resume(run_id, approved=request.approved):
+        # Simulator was paused on a human gate; it'll drive the run to the
+        # terminal state itself. Return the current snapshot.
+        return run
+
+    # No pending gate — fall back to the legacy behaviour (one-shot flip).
     run["status"] = "succeeded" if request.approved else "cancelled"
     return run
 
