@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 
 import uvicorn
-from alembic import command
-from alembic.config import Config
 
 from praetor_api.settings import get_settings
 
@@ -13,6 +11,10 @@ def maybe_migrate() -> None:
     settings = get_settings()
     if settings.data_mode != "production" or not settings.auto_migrate:
         return
+    # Import alembic lazily so demo mode boots without it.
+    from alembic import command
+    from alembic.config import Config
+
     command.upgrade(Config("alembic.ini"), "head")
 
 
