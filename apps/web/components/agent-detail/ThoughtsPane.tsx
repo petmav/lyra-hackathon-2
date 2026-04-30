@@ -29,7 +29,7 @@ const VISIBLE_TYPES = new Set([
 ]);
 
 export function ThoughtsPane({ events }: { events: AgentEvent[] }) {
-  const filtered = events.filter((e) => VISIBLE_TYPES.has(e.type));
+  const filtered = events.filter((e) => typeof e.type === "string" && VISIBLE_TYPES.has(e.type));
   return (
     <div className="flex flex-col">
       <PaneHeader label="Thoughts · Tools · Boundary" count={filtered.length} />
@@ -132,6 +132,7 @@ function Body({ event }: { event: AgentEvent }) {
 }
 
 function chipLabel(t: string) {
+  t = String(t ?? "");
   if (t === "agent.thought") return "thought";
   if (t === "agent.tool.called") return "tool";
   if (t === "agent.tool.refused") return "refused";
@@ -141,6 +142,7 @@ function chipLabel(t: string) {
 }
 
 function chipToneFor(t: string) {
+  t = String(t ?? "");
   if (t === "agent.tool.refused") return "crit" as const;
   if (t === "agent.tool.called") return "info" as const;
   if (t === "agent.thought") return "muted" as const;

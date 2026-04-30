@@ -46,8 +46,8 @@ export function WorkflowGraph({
             step={n.step}
             x={n.x}
             y={n.y}
-            isActive={n.step.id === activeStepId}
-            onClick={() => onStepClick?.(n.step.id)}
+            isActive={n.step.step_id === activeStepId}
+            onClick={() => onStepClick?.(n.step.step_id)}
           />
         ))}
       </svg>

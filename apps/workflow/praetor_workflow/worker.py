@@ -40,6 +40,17 @@ def main() -> None:
     tick = 0
     while True:
         try:
+            schedule_result = _post_json(
+                f"{api_base}/workflow-schedules:tick",
+                {"limit": batch_size},
+                token,
+            )
+            scheduled_count = int(schedule_result.get("count", 0))
+            if scheduled_count:
+                print(f"praetor workflow scheduler enqueued {scheduled_count} run(s)", flush=True)
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            print(f"praetor workflow scheduler tick failed: {exc}", flush=True)
+        try:
             result = _post_json(
                 f"{api_base}/workflow-runs:drain",
                 {

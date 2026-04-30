@@ -235,7 +235,7 @@ class DockerSandboxOrchestrator:
                     {"name": "allows allowlisted recipient", "status": "passed"},
                 ],
                 "docker_launch": "fallback",
-                "manifest": json.loads(json.dumps(manifest.__dict__)),
+                "manifest": _redact_manifest(json.loads(json.dumps(manifest.__dict__))),
                 "isolation": _isolation_profile(manifest),
                 "agent_step_output": agent_output,
             },
@@ -251,6 +251,15 @@ def _isolation_profile(manifest: SandboxManifest) -> dict[str, Any]:
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges"],
     }
+
+
+def _redact_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    env = manifest.get("environment")
+    if isinstance(env, dict):
+        for key in list(env):
+            if "TOKEN" in key or "KEY" in key or "SECRET" in key:
+                env[key] = "[redacted]"
+    return manifest
 
 
 def _attach_agent_output(result: dict[str, Any], stdout: str) -> None:

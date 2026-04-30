@@ -24,6 +24,8 @@ import { api } from "@/lib/api";
  */
 export function ProposedChangeView({ change, compact }: { change: ProposedChange; compact?: boolean }) {
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const status = change.status ?? "awaiting_approval";
+  const risk = typeof change.residual_risk_estimate === "number" ? change.residual_risk_estimate : 0;
 
   return (
     <div className="border border-rule rounded-sm">
@@ -31,7 +33,7 @@ export function ProposedChangeView({ change, compact }: { change: ProposedChange
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="gold">{change.kind}</Badge>
-            <Badge tone={statusTone(change.status)}>{change.status.replace("_", " ")}</Badge>
+            <Badge tone={statusTone(status)}>{status.replace("_", " ")}</Badge>
             <Urn urn={change.urn} />
           </div>
           <h3 className="mt-3 text-[17px] font-semibold tracking-tight text-paper">
@@ -40,14 +42,14 @@ export function ProposedChangeView({ change, compact }: { change: ProposedChange
           <div className="mt-3 flex items-center gap-6 text-[11.5px] text-paper-fade">
             <span className="inline-flex items-center gap-2">
               <span className="smallcaps">residual risk</span>
-              <Confidence value={change.residual_risk_estimate} />
+              <Confidence value={risk} />
             </span>
             {change.target_asset_id && (
               <span className="font-mono">target · {change.target_asset_id}</span>
             )}
           </div>
         </div>
-        {change.status === "awaiting_approval" && (
+        {status === "awaiting_approval" && (
           <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="primary"
@@ -101,7 +103,7 @@ function statusTone(s: ProposedChange["status"]) {
 }
 
 function DiffView({ diff, format, compact }: { diff: string; format: ProposedChange["diff_format"]; compact?: boolean }) {
-  const lines = diff.split("\n");
+  const lines = String(diff ?? "").split("\n");
   return (
     <div className={cn(compact ? "border-b border-rule" : "xl:border-r xl:border-rule border-b border-rule xl:border-b-0")}>
       <div className="border-b border-rule bg-ink px-4 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-paper-fade flex items-center justify-between">

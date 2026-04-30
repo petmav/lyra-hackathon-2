@@ -119,7 +119,6 @@ export function WorkflowCanvas({
   };
 
   const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
     const delta = -event.deltaY * 0.0015;
     const nextScale = Math.min(2, Math.max(0.4, view.scale + delta));
     if (nextScale === view.scale) return;
@@ -140,10 +139,10 @@ export function WorkflowCanvas({
   };
 
   const onNodePointerDown = (event: React.PointerEvent<HTMLDivElement>, node: WorkflowGraphNode) => {
+    onSelectNode?.(node.id);
     if (!editable) return;
     if ((event.target as HTMLElement).closest("[data-port]")) return;
     event.stopPropagation();
-    onSelectNode?.(node.id);
     setDrag({
       kind: "node",
       nodeId: node.id,

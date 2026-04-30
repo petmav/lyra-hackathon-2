@@ -4,6 +4,7 @@ import base64
 import json
 import asyncio
 import hashlib
+from urllib.parse import urlparse
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -24,7 +25,8 @@ from praetor_api.models.workflow import Workflow
 from praetor_api.models.workflow_run import WorkflowRun
 from praetor_api.services.demo_workflows import CODE_COMPLIANCE_SCAN
 from praetor_api.services.event_stream import append_persisted_event
-from praetor_api.services.model_providers import ModelProviderError, complete, provider_configured
+from praetor_api.services.model_providers import ModelProviderError, complete, provider_api_key, provider_configured
+from praetor_api.services.secrets import resolve_secret
 from praetor_api.settings import get_settings
 
 ASSET_EXTERNAL_ID = "asset_northwind_support_bot"
@@ -71,6 +73,85 @@ WORKFLOW_TEMPLATES: dict[str, dict[str, Any]] = {
             {"id": "policy_gate", "type": "gate.policy", "depends_on": ["propose"], "with": {"policy_set": "praetor.controls.workflow_findings_gate", "severity": "high"}},
             {"id": "human_gate", "type": "gate.human", "depends_on": ["policy_gate"], "with": {"role_required": "grc_reviewer", "timeout_minutes": 1440}},
             {"id": "open_pr", "type": "hook.out", "depends_on": ["human_gate"], "with": {"hook_id": "github_stub", "operation": "open_pr"}},
+        ],
+    },
+    "github_corpus_code_compliance": {
+        "id": "github_corpus_code_compliance",
+        "urn": "urn:praetor:workflow:demo:github-corpus-code-compliance",
+        "name": "github_corpus_code_compliance",
+        "description": "Download a GitHub repository inside the sandbox, verify code compliance against selected corpus documents, then request a GitHub change when findings require remediation.",
+        "trigger": "manual",
+        "required_hooks": ["github_json"],
+        "required_corpora": [],
+        "inputs_schema": {
+            "repo_url": "https://github.com/{owner}/{repo}",
+            "github_ref": "branch, tag, or SHA to download",
+            "corpus_ids": "list of corpus ids to verify against",
+            "github_base_branch": "target branch for a PR request",
+            "github_head_branch": "existing remediation branch for a live PR request",
+            "live_github_dispatch": "true to call GitHub; false previews the outbound PR request",
+        },
+        "steps": [
+            {
+                "id": "resolve_repo",
+                "type": "hook.in",
+                "with": {
+                    "hook_id": "github_json",
+                    "operation": "resolve_repository",
+                    "repo_url": "{{ inputs.repo_url }}",
+                    "ref": "{{ inputs.github_ref }}",
+                },
+            },
+            {
+                "id": "retrieve_controls",
+                "type": "corpus.query",
+                "depends_on": ["resolve_repo"],
+                "with": {
+                    "query": "code compliance obligations validation security controls change approval",
+                    "corpora": "{{ inputs.corpus_ids }}",
+                    "k": 12,
+                },
+            },
+            {
+                "id": "sandbox_verify",
+                "type": "agent",
+                "depends_on": ["retrieve_controls"],
+                "with": {
+                    "mode": "github_code_compliance",
+                    "system_prompt_ref": "content/prompts/github_code_compliance.md",
+                    "tool_budget": 16,
+                },
+            },
+            {"id": "emit", "type": "finding.emit", "depends_on": ["sandbox_verify"], "with": {}},
+            {
+                "id": "propose_change",
+                "type": "change.propose",
+                "depends_on": ["emit"],
+                "with": {"target": "{{ inputs.repo_url }}", "kind": "code"},
+            },
+            {
+                "id": "policy_gate",
+                "type": "gate.policy",
+                "depends_on": ["propose_change"],
+                "with": {"policy_set": "praetor.controls.code_compliance", "severity": "high"},
+            },
+            {
+                "id": "human_gate",
+                "type": "gate.human",
+                "depends_on": ["policy_gate"],
+                "with": {"role_required": "compliance_reviewer", "timeout_minutes": 1440},
+            },
+            {
+                "id": "github_change_request",
+                "type": "hook.out",
+                "depends_on": ["human_gate"],
+                "with": {
+                    "hook_id": "github_json",
+                    "operation": "create_pull_request",
+                    "base": "{{ inputs.github_base_branch }}",
+                    "head": "{{ inputs.github_head_branch }}",
+                },
+            },
         ],
     },
     "vendor_risk_review": {
@@ -341,7 +422,7 @@ async def ensure_workflow(session: AsyncSession, workflow_id: str = CODE_COMPLIA
         definition=_definition_summary(template),
         trigger=template["trigger"],
         trigger_config={"mode": "manual"},
-        inputs_schema={"type": "object"},
+        inputs_schema=dict(template.get("inputs_schema") or {"type": "object"}),
         outputs_schema={"type": "object"},
         required_hooks=template["required_hooks"],
         required_corpora=template["required_corpora"],
@@ -468,6 +549,106 @@ async def update_custom_workflow(
     await session.commit()
     await session.refresh(workflow)
     return _workflow_row_to_api(workflow)
+
+
+async def configure_workflow_schedule(
+    session: AsyncSession,
+    workflow_id: str,
+    *,
+    inputs: dict[str, Any],
+    enabled: bool,
+    continuous_monitoring: bool,
+    recurrence: dict[str, Any],
+    model_provider: str,
+    model: str,
+) -> dict[str, Any] | None:
+    workflow = await _workflow_record_for(session, workflow_id)
+    if workflow is None:
+        return None
+    interval_seconds = _recurrence_interval_seconds(recurrence, continuous_monitoring)
+    now = datetime.now(UTC)
+    start_at = _parse_dt(recurrence.get("start_at")) if isinstance(recurrence, dict) else None
+    next_run_at = start_at or now
+    workflow.trigger = "schedule" if enabled else "manual"
+    workflow.trigger_config = {
+        "mode": "continuous" if continuous_monitoring else "schedule",
+        "enabled": enabled,
+        "continuous_monitoring": continuous_monitoring,
+        "recurrence": recurrence,
+        "interval_seconds": interval_seconds,
+        "next_run_at": next_run_at.isoformat(),
+        "last_run_at": None,
+        "inputs": inputs,
+        "model_provider": model_provider,
+        "model": model,
+    }
+    await session.commit()
+    await session.refresh(workflow)
+    return _workflow_row_to_api(workflow)
+
+
+async def tick_workflow_schedules(session: AsyncSession, *, limit: int = 10) -> list[dict[str, Any]]:
+    now = datetime.now(UTC)
+    result = await session.execute(select(Workflow).where(Workflow.trigger == "schedule").order_by(Workflow.updated_at))
+    rows = list(result.scalars().all())
+    created: list[dict[str, Any]] = []
+    for workflow in rows:
+        if len(created) >= limit:
+            break
+        config = workflow.trigger_config or {}
+        if not config.get("enabled"):
+            continue
+        next_run_at = _parse_dt(config.get("next_run_at")) or now
+        if next_run_at > now:
+            continue
+        workflow_id = _workflow_row_to_api(workflow)["id"]
+        scheduled_inputs = dict(config.get("inputs") or {})
+        scheduled_inputs["_schedule"] = {
+            "workflow_id": workflow_id,
+            "mode": config.get("mode", "schedule"),
+            "continuous_monitoring": bool(config.get("continuous_monitoring")),
+            "scheduled_for": next_run_at.isoformat(),
+        }
+        run = await enqueue_workflow_run(
+            session,
+            workflow_id,
+            scheduled_inputs,
+            model_provider=str(config.get("model_provider") or get_settings().default_model_provider),
+            model=str(config.get("model") or get_settings().default_model_name),
+        )
+        interval = int(config.get("interval_seconds") or 3600)
+        config["last_run_at"] = now.isoformat()
+        config["next_run_at"] = (now + timedelta(seconds=max(60, interval))).isoformat()
+        workflow.trigger_config = dict(config)
+        created.append({"workflow_id": workflow_id, "workflow_run_id": run["id"], "next_run_at": config["next_run_at"]})
+    if created:
+        await session.commit()
+    return created
+
+
+async def _workflow_record_for(session: AsyncSession, workflow_id: str) -> Workflow | None:
+    if workflow_id in WORKFLOW_TEMPLATES or workflow_id in WORKFLOW_BY_URN:
+        return await ensure_workflow(session, workflow_id)
+    filters = [Workflow.urn == workflow_id, Workflow.urn == f"urn:praetor:workflow:custom:{workflow_id}"]
+    try:
+        filters.append(Workflow.id == UUID(workflow_id))
+    except ValueError:
+        pass
+    result = await session.execute(select(Workflow).where(or_(*filters)))
+    return result.scalar_one_or_none()
+
+
+def _recurrence_interval_seconds(recurrence: dict[str, Any], continuous_monitoring: bool) -> int:
+    if continuous_monitoring:
+        return int(recurrence.get("interval_seconds") or 300)
+    preset = str(recurrence.get("preset") or "daily")
+    if preset == "hourly":
+        return 3600
+    if preset == "weekly":
+        return 7 * 24 * 3600
+    if preset == "custom":
+        return max(60, int(recurrence.get("interval_seconds") or 3600))
+    return 24 * 3600
 
 
 async def delete_custom_workflow(session: AsyncSession, workflow_id: str) -> bool:
@@ -1088,8 +1269,8 @@ async def _persist_findings_and_proposals(
             title=finding["title"],
             description=finding["description"],
             severity=finding["severity"],
-            obligations_cited=finding["obligations_cited"],
-            documents_cited=finding["documents_cited"],
+            obligations_cited=_string_list(finding.get("obligations_cited", [])),
+            documents_cited=_string_list(finding.get("documents_cited", [])),
             confidence=finding["confidence"],
             status=finding["status"],
             proposed_change_ids=[],
@@ -1141,6 +1322,25 @@ async def _persist_findings_and_proposals(
             *list(finding_row.proposed_change_ids or []),
             proposal_id,
         ]
+
+
+def _string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    for value in values:
+        if isinstance(value, str):
+            normalized.append(value)
+        elif isinstance(value, dict):
+            if isinstance(value.get("urn"), str):
+                normalized.append(value["urn"])
+            elif isinstance(value.get("document_id"), str):
+                corpus_id = value.get("corpus_id")
+                prefix = f"{corpus_id}:" if isinstance(corpus_id, str) and corpus_id else ""
+                normalized.append(f"urn:praetor:document:{prefix}{value['document_id']}")
+            elif isinstance(value.get("id"), str):
+                normalized.append(str(value["id"]))
+    return normalized
 
 
 async def _persist_policy_decision(
@@ -1395,7 +1595,10 @@ def _workflow_run_to_api(row: WorkflowRun, steps: list[StepRun]) -> dict[str, An
         "inputs": row.inputs,
         "model_provider": outputs.get("model_provider", "openai"),
         "model": outputs.get("model", "gpt-4.1-mini"),
-        "outputs": {"findings": outputs.get("findings", [])},
+        "outputs": {
+            "findings": outputs.get("findings", []),
+            "proposed_changes": outputs.get("proposed_changes", []),
+        },
         "evidence_record_ids": row.evidence_record_ids,
         "step_runs": [
             {
@@ -1702,6 +1905,34 @@ def _definition_summary(template: dict[str, Any]) -> str:
     return " -> ".join(step["id"] for step in template["steps"])
 
 
+def _configured_corpora(step: dict[str, Any], inputs: dict[str, Any]) -> list[str]:
+    configured = step.get("with", {}).get("corpora")
+    if isinstance(configured, list):
+        return [str(item) for item in configured if str(item)]
+    if isinstance(inputs.get("corpus_ids"), list):
+        return [str(item) for item in inputs["corpus_ids"] if str(item)]
+    if isinstance(inputs.get("corpus_id"), str) and inputs["corpus_id"]:
+        return [str(inputs["corpus_id"])]
+    return []
+
+
+def _github_repo_from_inputs(inputs: dict[str, Any]) -> dict[str, str] | None:
+    owner = str(inputs.get("github_owner") or "").strip()
+    repo = str(inputs.get("github_repo") or "").strip()
+    repo_url = str(inputs.get("repo_url") or inputs.get("github_repo_url") or "").strip()
+    if (not owner or not repo) and repo_url:
+        parsed = urlparse(repo_url)
+        if parsed.netloc.lower() in {"github.com", "www.github.com"}:
+            parts = [part for part in parsed.path.strip("/").split("/") if part]
+            if len(parts) >= 2:
+                owner = owner or parts[0]
+                repo = repo or parts[1].removesuffix(".git")
+    if not owner or not repo:
+        return None
+    ref = str(inputs.get("github_ref") or inputs.get("ref") or inputs.get("github_base_branch") or "main").strip() or "main"
+    return {"owner": owner, "repo": repo.removesuffix(".git"), "ref": ref}
+
+
 async def _execute_step(
     step: dict[str, Any],
     context: dict[str, Any],
@@ -1716,8 +1947,49 @@ async def _execute_step(
     inputs = context["inputs"]
     if step_type == "hook.in":
         repo_url = inputs.get("repo_url") or step.get("with", {}).get("repo_url") or "stub://support-bot"
-        return {"repo_url": repo_url, "files": ["tools.py", "README.md"]}, "succeeded"
+        repo = _github_repo_from_inputs(inputs)
+        if step.get("with", {}).get("hook_id") == "github_json" and repo is None:
+            return {"repo_url": repo_url, "error": "repo_url must identify a GitHub owner/repo"}, "failed"
+        output: dict[str, Any] = {"repo_url": repo_url, "files": []}
+        if repo is not None:
+            output.update(
+                {
+                    "owner": repo["owner"],
+                    "repo": repo["repo"],
+                    "ref": repo["ref"],
+                    "download": "sandbox",
+                    "summary": "Repository identity resolved; source download is performed inside the sandbox step.",
+                }
+            )
+        else:
+            output["files"] = ["tools.py", "README.md"]
+        return output, "succeeded"
     if step_type == "corpus.query":
+        corpus_ids = _configured_corpora(step, inputs)
+        query = str(step.get("with", {}).get("query") or inputs.get("corpus_query") or "code compliance")
+        k = int(step.get("with", {}).get("k") or inputs.get("k") or 8)
+        if session is not None and corpus_ids:
+            from praetor_api.services import production_corpus
+
+            hits: list[dict[str, Any]] = []
+            for corpus_id in corpus_ids:
+                try:
+                    rows = await production_corpus.search(session, corpus_id, query, k=k)
+                except KeyError:
+                    continue
+                for row in rows:
+                    hits.append(
+                        {
+                            "corpus_id": corpus_id,
+                            "document_id": row.get("document_id"),
+                            "title": row.get("citation_path") or row.get("document_id") or f"{corpus_id} excerpt",
+                            "excerpt": row.get("text", ""),
+                            "citation_path": row.get("citation_path"),
+                            "score": row.get("score", 0),
+                        }
+                    )
+            hits.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+            return {"query": query, "corpora": corpus_ids, "hits": hits[:k]}, "succeeded"
         return {
             "hits": [
                 {
@@ -1726,7 +1998,7 @@ async def _execute_step(
                     "excerpt": "Email tools must validate recipient domains before sending.",
                     "score": 0.91,
                 }
-                for corpus_id in step.get("with", {}).get("corpora", [])
+                for corpus_id in corpus_ids
             ]
         }, "succeeded"
     if step_type == "agent":
@@ -1743,7 +2015,7 @@ async def _execute_step(
                 model=model,
             )
         model_call = await _run_agent_model(step, context, provider=model_provider, model=model)
-        return _agent_outputs(model_provider, model, model_call, _finding_payload(finding_slug)), (
+        return _agent_outputs(model_provider, model, model_call, [_finding_payload(finding_slug)]), (
             "succeeded" if model_call.get("ok", True) else "failed"
         )
     if step_type == "finding.emit":
@@ -1754,6 +2026,16 @@ async def _execute_step(
         return {"count": len(findings), "emitted": findings}, "succeeded"
     if step_type == "change.propose":
         emitted = _latest_step_outputs(context, "finding.emit").get("emitted", [])
+        if not emitted:
+            compliance = _latest_step_outputs(context, "agent").get("compliance_status", "approved")
+            return {
+                "proposal_id": None,
+                "finding_title": None,
+                "target": step.get("with", {}).get("target", "repository"),
+                "proposed_changes": [],
+                "compliance_status": compliance,
+                "approval": "no code changes requested",
+            }, "succeeded"
         finding = emitted[0] if emitted and isinstance(emitted[0], dict) else {}
         title = finding.get("title", "No finding emitted")
         target = step.get("with", {}).get("target", "tools.py")
@@ -1790,6 +2072,8 @@ async def _execute_step(
             return {"role_required": step.get("with", {}).get("role_required", "reviewer")}, "awaiting_approval"
         return {"approved": True, "approver": "demo-analyst"}, "succeeded"
     if step_type == "hook.out":
+        if step.get("with", {}).get("hook_id") == "github_json":
+            return await _run_github_hook_out(step, context, session=session)
         return {
             "hook_id": step.get("with", {}).get("hook_id", "github_stub"),
             "operation": step.get("with", {}).get("operation", "open_pr"),
@@ -1798,6 +2082,110 @@ async def _execute_step(
     if step_type == "transform":
         return json.loads(json.dumps(step.get("with", {}))), "succeeded"
     return {"unsupported_step_type": step_type}, "failed"
+
+
+async def _run_github_hook_out(
+    step: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    session: AsyncSession | None,
+) -> tuple[dict[str, Any], str]:
+    inputs = context.get("inputs", {})
+    proposed = _latest_step_outputs(context, "change.propose").get("proposed_changes", [])
+    agent_outputs = _latest_step_outputs(context, "agent")
+    if not proposed:
+        return {
+            "hook_id": "github_json",
+            "operation": "create_pull_request",
+            "status": "skipped",
+            "reason": "no compliance findings required a code change",
+            "compliance_status": agent_outputs.get("compliance_status", "approved"),
+        }, "succeeded"
+
+    repo = _github_repo_from_inputs(inputs)
+    if repo is None:
+        return {"hook_id": "github_json", "operation": "create_pull_request", "error": "missing github repo"}, "failed"
+
+    head = str(inputs.get("github_head_branch") or inputs.get("head") or "").strip()
+    base = str(inputs.get("github_base_branch") or inputs.get("base") or repo["ref"] or "main").strip()
+    live_dispatch = bool(inputs.get("live_github_dispatch"))
+    if live_dispatch and not head:
+        return {
+            "hook_id": "github_json",
+            "operation": "create_pull_request",
+            "status": "not_sent",
+            "error": "live_github_dispatch requires github_head_branch pointing at an existing branch",
+        }, "failed"
+
+    first = proposed[0] if isinstance(proposed[0], dict) else {}
+    title = str(inputs.get("pull_request_title") or first.get("title") or "Praetor compliance remediation request")
+    body = _github_pr_body(context, proposed)
+    payload = {
+        "owner": repo["owner"],
+        "repo": repo["repo"],
+        "title": title,
+        "head": head or f"praetor/compliance-remediation-{uuid4().hex[:8]}",
+        "base": base or "main",
+        "body": body,
+    }
+
+    if session is None:
+        return {
+            "hook_id": "github_json",
+            "operation": "create_pull_request",
+            "status": "preview",
+            "request": payload,
+            "dry_run": True,
+        }, "succeeded"
+
+    from praetor_api.services import production_hooks
+
+    call = await production_hooks.call_hook(
+        session,
+        "github_json",
+        "create_pull_request",
+        payload,
+        dry_run=not live_dispatch,
+        effect_approved=True,
+    )
+    output = {
+        "hook_id": "github_json",
+        "operation": "create_pull_request",
+        "dry_run": not live_dispatch,
+        "request": payload,
+        "hook_call": call,
+    }
+    return output, "succeeded" if call.get("status") == "succeeded" else "failed"
+
+
+def _github_pr_body(context: dict[str, Any], proposed: list[Any]) -> str:
+    agent_outputs = _latest_step_outputs(context, "agent")
+    findings = agent_outputs.get("findings", [])
+    lines = [
+        "Praetor code compliance review requested remediation.",
+        "",
+        "Findings:",
+    ]
+    if isinstance(findings, list) and findings:
+        for finding in findings:
+            if isinstance(finding, dict):
+                lines.append(f"- {finding.get('severity', 'unknown')}: {finding.get('title', 'Untitled finding')}")
+    else:
+        lines.append("- No finding details were emitted.")
+    lines.extend(["", "Requested changes:"])
+    for change in proposed:
+        if isinstance(change, dict):
+            lines.append(f"- {change.get('id', 'change')}: {change.get('residual_risk_estimate', 'Review proposed diff.')}")
+    repo_meta = agent_outputs.get("repository") if isinstance(agent_outputs.get("repository"), dict) else {}
+    if repo_meta:
+        lines.extend(
+            [
+                "",
+                f"Sandbox download: {repo_meta.get('owner')}/{repo_meta.get('repo')}@{repo_meta.get('ref')}",
+                f"Files scanned: {repo_meta.get('files_scanned')}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 async def _execute_with_retries(
@@ -1924,7 +2312,7 @@ async def _run_agent_step_in_sandbox(
     sandbox = SandboxRun(
         step_run_id=step_run.id,
         workflow_run_id=workflow_run.id,
-        manifest=manifest | {"orchestrator_mode": launch["mode"]},
+        manifest=_redact_manifest(manifest) | {"orchestrator_mode": launch["mode"]},
         started_at=_parse_dt(launch.get("started_at")),
         finished_at=_parse_dt(launch.get("finished_at")),
         exit_code=int(launch.get("exit_code", 0)),
@@ -1939,7 +2327,7 @@ async def _run_agent_step_in_sandbox(
         str(agent_output.get("model_provider") or model_provider),
         str(agent_output.get("model") or model),
         _model_call_from_agent_output(agent_output, model_provider, model),
-        _finding_from_agent_output(agent_output, finding),
+        _findings_from_agent_output(agent_output, finding),
     )
     outputs.update(
         {
@@ -1949,6 +2337,10 @@ async def _run_agent_step_in_sandbox(
             "agent_execution": "sandbox",
             "tools": agent_output.get("tools", []),
             "memory_writes": agent_output.get("memory_writes", []),
+            "repository": agent_output.get("repository"),
+            "compliance_status": agent_output.get("compliance_status"),
+            "change_requests": agent_output.get("change_requests", []),
+            "verification_summary": agent_output.get("verification_summary"),
             "sandbox": {
                 "mode": launch.get("mode"),
                 "exit_code": sandbox.exit_code,
@@ -1959,6 +2351,16 @@ async def _run_agent_step_in_sandbox(
     sandbox_ok = sandbox.exit_code == 0
     agent_ok = bool(agent_output.get("ok", True))
     return outputs, "succeeded" if sandbox_ok and agent_ok else "failed"
+
+
+def _redact_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    redacted = json.loads(json.dumps(manifest))
+    env = redacted.get("environment")
+    if isinstance(env, dict):
+        for key in list(env):
+            if "TOKEN" in key or "KEY" in key or "SECRET" in key:
+                env[key] = "[redacted]"
+    return redacted
 
 
 async def _ensure_workflow_agent_asset(
@@ -2028,6 +2430,48 @@ def _agent_sandbox_manifest(
         "workflow_inputs": context.get("inputs", {}),
         "documents": documents,
     }
+    github_mode = step.get("with", {}).get("mode") == "github_code_compliance"
+    if github_mode:
+        agent_payload["github"] = _github_repo_from_inputs(context.get("inputs", {}) or {})
+    command = ["python", "-m", "praetor_sandbox.harness.agent_step"]
+    settings_now = get_settings()
+    environment = {
+        "PRAETOR_WORKFLOW_RUN_ID": run_slug,
+        "PRAETOR_WORKFLOW_STEP_ID": step_id,
+        "PRAETOR_ASSET_URN": workflow_agent.urn,
+        "PRAETOR_MODEL_PROVIDER": model_provider,
+        "PRAETOR_MODEL": model,
+        "PRAETOR_AGENT_MODEL_MODE": settings_now.agent_model_mode,
+        "PRAETOR_AGENT_MANIFEST_JSON": json.dumps(agent_payload, sort_keys=True),
+    }
+    # Inject the active provider's API key so the harness can call the model
+    # from inside the sandbox. Only the requested provider's key is forwarded
+    # to keep the blast radius minimal; the manifest redactor scrubs these
+    # before they land in evidence/logs.
+    for provider_id in {model_provider, "openai", "anthropic", "google"}:
+        key = provider_api_key(provider_id)
+        if not key:
+            continue
+        env_var = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "google": "GOOGLE_API_KEY",
+        }.get(provider_id)
+        if env_var:
+            environment[env_var] = key
+    network = "praetor-mocks"
+    timeout_seconds = 30
+    memory_mb = 512
+    read_only_root = True
+    if github_mode:
+        command = ["python", "-m", "praetor_sandbox.harness.github_code_compliance"]
+        token = resolve_secret("secret:github_token")
+        if token:
+            environment["GITHUB_TOKEN"] = token
+        network = "bridge"
+        timeout_seconds = 120
+        memory_mb = 1024
+        read_only_root = True
     return {
         "mode": "agent_step",
         "fallback": "deterministic-replay",
@@ -2036,29 +2480,19 @@ def _agent_sandbox_manifest(
         "workflow_run_id": run_slug,
         "asset_urn": workflow_agent.urn,
         "image": settings.sandbox_image,
-        "command": [
-            "python",
-            "-m",
-            "praetor_sandbox.harness.agent_step",
-        ],
-        "network": "praetor-mocks",
-        "timeout_seconds": 30,
-        "memory_mb": 512,
+        "command": command,
+        "network": network,
+        "timeout_seconds": timeout_seconds,
+        "memory_mb": memory_mb,
         "pids_limit": 128,
-        "read_only_root": True,
-        "environment": {
-            "PRAETOR_WORKFLOW_RUN_ID": run_slug,
-            "PRAETOR_WORKFLOW_STEP_ID": step_id,
-            "PRAETOR_ASSET_URN": workflow_agent.urn,
-            "PRAETOR_MODEL_PROVIDER": model_provider,
-            "PRAETOR_MODEL": model,
-            "PRAETOR_AGENT_MANIFEST_JSON": json.dumps(agent_payload, sort_keys=True),
-        },
+        "read_only_root": read_only_root,
+        "environment": environment,
         "agent": {
             "model": model,
             "provider": model_provider,
-            "system_prompt_ref": "content/prompts/code_compliance_scanner.md",
+            "system_prompt_ref": step.get("with", {}).get("system_prompt_ref", "content/prompts/code_compliance_scanner.md"),
             "tools": [
+                "github_download",
                 "grep",
                 "ast_parse",
                 "corpus_query",
@@ -2159,26 +2593,30 @@ def _model_call_from_agent_output(
     }
 
 
-def _finding_from_agent_output(
+def _valid_finding(candidate: dict[str, Any]) -> bool:
+    required = {
+        "id",
+        "title",
+        "description",
+        "severity",
+        "confidence",
+        "obligations_cited",
+        "documents_cited",
+        "status",
+    }
+    return required.issubset(candidate)
+
+
+def _findings_from_agent_output(
     agent_output: dict[str, Any],
     fallback_finding: dict[str, Any],
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     findings = agent_output.get("findings")
-    if isinstance(findings, list) and findings and isinstance(findings[0], dict):
-        candidate = findings[0]
-        required = {
-            "id",
-            "title",
-            "description",
-            "severity",
-            "confidence",
-            "obligations_cited",
-            "documents_cited",
-            "status",
-        }
-        if required.issubset(candidate):
-            return candidate
-    return fallback_finding
+    if isinstance(findings, list):
+        valid = [candidate for candidate in findings if isinstance(candidate, dict) and _valid_finding(candidate)]
+        if len(valid) == len(findings):
+            return valid
+    return [fallback_finding]
 
 
 async def _launch_sandbox(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -2220,7 +2658,7 @@ def _sandbox_replay(manifest: dict[str, Any], reason: str) -> dict[str, Any]:
             ],
             "docker_launch": "fallback",
             "fallback_reason": reason,
-            "manifest": manifest,
+            "manifest": _redact_manifest(manifest),
             "agent_step_output": agent_output,
         },
     }
@@ -2236,6 +2674,33 @@ def _agent_output_from_manifest(manifest: dict[str, Any]) -> dict[str, Any] | No
             payload = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
             payload = {}
+    if isinstance(payload.get("github"), dict):
+        provider = str(payload.get("model_provider") or (manifest.get("environment") or {}).get("PRAETOR_MODEL_PROVIDER") or "openai")
+        model = str(payload.get("model") or (manifest.get("environment") or {}).get("PRAETOR_MODEL") or "gpt-5.4-mini")
+        return {
+            "ok": False,
+            "model_provider": provider,
+            "model": model,
+            "model_call": {
+                "ok": False,
+                "mode": "sandbox_replay_unavailable",
+                "provider": "praetor-sandbox",
+                "model": "deterministic-code-compliance-rules",
+                "configured": False,
+                "error": "github code compliance requires a live sandbox download; deterministic replay is disabled for this workflow",
+                "text": "",
+                "usage": {},
+            },
+            "repository": payload.get("github"),
+            "compliance_status": "verification_failed",
+            "verification_summary": {
+                "error": "github code compliance requires a live sandbox download; deterministic replay is disabled"
+            },
+            "findings": [],
+            "change_requests": [],
+            "tools": [{"name": "github_download", "status": "not_run"}],
+            "memory_writes": [],
+        }
     finding = payload.get("expected_finding")
     if not isinstance(finding, dict):
         finding = _finding_payload(str(payload.get("finding_id") or f"fnd_{uuid4().hex[:12]}"))
@@ -2273,13 +2738,13 @@ def _agent_outputs(
     model_provider: str,
     model: str,
     model_call: dict[str, Any],
-    finding: dict[str, Any],
+    findings: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "model_provider": model_provider,
         "model": model,
         "model_call": model_call,
-        "findings": [finding],
+        "findings": findings,
     }
 
 
@@ -2345,6 +2810,15 @@ async def _collect_workflow_documents(
                 total += size
             except OSError:
                 entry["base64_error"] = "unreadable"
+        elif not doc.binary_path:
+            parsed = doc.parsed_structure or {}
+            text = parsed.get("text") if isinstance(parsed, dict) else None
+            if isinstance(text, str) and text:
+                raw = text.encode("utf-8")
+                if len(raw) <= _INLINE_DOC_BYTES and total + len(raw) <= _INLINE_TOTAL_BYTES:
+                    entry["media_type"] = "text/markdown"
+                    entry["base64"] = base64.b64encode(raw).decode("ascii")
+                    total += len(raw)
         bundled.append(entry)
     return bundled
 
@@ -2387,6 +2861,8 @@ def _latest_step_outputs(context: dict[str, Any], step_type: str) -> dict[str, A
             return outputs
         if step_type == "finding.emit" and "emitted" in outputs:
             return outputs
+        if step_type == "change.propose" and "proposed_changes" in outputs:
+            return outputs
     return {}
 
 
@@ -2397,7 +2873,27 @@ def _redacted_inputs(
     model: str,
 ) -> dict[str, Any]:
     if step["type"] == "agent":
-        return {"model_provider": model_provider, "model": model}
+        payload = {"model_provider": model_provider, "model": model}
+        if step.get("with", {}).get("mode"):
+            payload["mode"] = step["with"]["mode"]
+        return payload
     if step["type"] == "hook.in":
-        return {"repo_url": inputs.get("repo_url", step.get("with", {}).get("repo_url", "stub://support-bot"))}
+        return {
+            "repo_url": inputs.get("repo_url", step.get("with", {}).get("repo_url", "stub://support-bot")),
+            "github_ref": inputs.get("github_ref"),
+        }
+    if step["type"] == "corpus.query":
+        return {
+            "query": step.get("with", {}).get("query"),
+            "corpora": _configured_corpora(step, inputs),
+            "k": step.get("with", {}).get("k"),
+        }
+    if step["type"] == "hook.out":
+        return {
+            "hook_id": step.get("with", {}).get("hook_id"),
+            "operation": step.get("with", {}).get("operation"),
+            "live_github_dispatch": bool(inputs.get("live_github_dispatch")),
+            "github_base_branch": inputs.get("github_base_branch"),
+            "github_head_branch": inputs.get("github_head_branch") or ("[required for live dispatch]" if inputs.get("live_github_dispatch") else None),
+        }
     return json.loads(json.dumps(step.get("with", {})))

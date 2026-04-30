@@ -54,7 +54,9 @@ export function FindingCard({
           <div className="my-4 h-px bg-rule" />
           <div className="smallcaps mb-3">Citations</div>
           <ol className="flex flex-col gap-3 list-decimal list-inside marker:text-paper-fade marker:font-mono marker:text-[10.5px]">
-            {finding.documents_cited.map((c, i) => (
+            {finding.documents_cited.map((raw, i) => {
+              const c = normalizeCitation(raw, i);
+              return (
               <li key={`${c.document_id}-${c.chunk_ord}`} className="pl-2">
                 <Citation
                   framework={frameworkFromTitle(c.document_title)}
@@ -63,7 +65,7 @@ export function FindingCard({
                   className="inline-block ml-2"
                 />
               </li>
-            ))}
+            );})}
           </ol>
         </>
       )}
@@ -81,7 +83,30 @@ export function FindingCard({
   );
 }
 
-function frameworkFromTitle(t: string): string {
+function normalizeCitation(citation: unknown, index: number) {
+  if (citation && typeof citation === "object") {
+    const c = citation as Record<string, unknown>;
+    const title = String(c.document_title ?? c.document_id ?? c.citation_path ?? "Document");
+    return {
+      document_id: String(c.document_id ?? title),
+      document_title: title,
+      chunk_ord: Number(c.chunk_ord ?? index + 1),
+      citation_path: String(c.citation_path ?? title),
+      excerpt: typeof c.excerpt === "string" ? c.excerpt : undefined
+    };
+  }
+  const text = String(citation ?? "Document");
+  return {
+    document_id: text,
+    document_title: text,
+    chunk_ord: index + 1,
+    citation_path: text,
+    excerpt: undefined
+  };
+}
+
+function frameworkFromTitle(value: unknown): string {
+  const t = String(value ?? "");
   if (t.includes("GDPR") || t.includes("2016/679")) return "GDPR";
   if (t.includes("ISO")) return "ISO 42001";
   if (t.includes("EU AI") || t.includes("2024/1689")) return "EU AI ACT";

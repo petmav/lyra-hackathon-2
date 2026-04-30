@@ -161,19 +161,78 @@ function AgentForStep({
   wfaAssetUrn: string;
   events: AgentEvent[];
 }) {
+  const visibleEvents = events.length > 0 ? events : syntheticAgentEvents(stepRun, wfaAssetId);
   return (
-    <AgentDetail
-      asset={{
-        id: wfaAssetId,
-        urn: wfaAssetUrn,
-        type: "workflow_agent",
-        name: `${stepRun.step_id} agent - ${stepRun.step_type}`,
-        risk_tier: "L2",
-        lifecycle: "ephemeral"
-      }}
-      events={events}
-      compact
-    />
+    <section className="space-y-5">
+      <AgentOutputSummary step={stepRun} />
+      <AgentDetail
+        asset={{
+          id: wfaAssetId,
+          urn: wfaAssetUrn,
+          type: "workflow_agent",
+          name: `${stepRun.step_id} agent - ${stepRun.step_type}`,
+          risk_tier: "L2",
+          lifecycle: "ephemeral"
+        }}
+        events={visibleEvents}
+        compact
+      />
+    </section>
+  );
+}
+
+function AgentOutputSummary({ step }: { step: StepRun }) {
+  const output = step.outputs_redacted ?? {};
+  const modelCall = isRecord(output.model_call) ? output.model_call : {};
+  const findings = Array.isArray(output.findings) ? output.findings : [];
+  const tools = Array.isArray(output.tools) ? output.tools : [];
+  const changeRequests = Array.isArray(output.change_requests) ? output.change_requests : [];
+  const summary = isRecord(output.verification_summary) ? output.verification_summary : {};
+  const thoughtText = typeof modelCall.text === "string" && modelCall.text.length > 0
+    ? modelCall.text
+    : `Agent completed with status ${String(output.compliance_status ?? step.status)}.`;
+  return (
+    <div className="border border-rule bg-ink-2">
+      <div className="border-b border-rule px-4 py-3">
+        <div className="smallcaps">Agent output and thinking</div>
+        <div className="mt-1 text-[12px] text-paper-dim">
+          Auditable rationale summary, tool calls, findings, and raw sandbox output for this step.
+        </div>
+      </div>
+      <div className="grid gap-4 p-4 xl:grid-cols-[1fr_1fr]">
+        <div className="border border-rule p-3">
+          <div className="smallcaps mb-2">Thinking summary</div>
+          <p className="text-[13px] leading-snug text-paper">{thoughtText}</p>
+          <dl className="mt-3 grid grid-cols-2 gap-2 text-[11.5px]">
+            <Field label="Provider"><span className="font-mono text-paper-dim">{String(output.model_provider ?? "praetor")}</span></Field>
+            <Field label="Model"><span className="font-mono text-paper-dim">{String(output.model ?? "deterministic")}</span></Field>
+            <Field label="Files scanned"><span className="font-mono text-paper-dim">{String(summary.source_files_scanned ?? "-")}</span></Field>
+            <Field label="Findings"><span className="font-mono text-paper-dim">{String(summary.findings_count ?? findings.length)}</span></Field>
+          </dl>
+        </div>
+        <div className="border border-rule p-3">
+          <div className="smallcaps mb-2">Tools</div>
+          {tools.length === 0 ? (
+            <div className="text-[12px] text-paper-fade italic">No tool calls captured.</div>
+          ) : (
+            <ul className="space-y-2">
+              {tools.map((tool, index) => (
+                <li key={index} className="flex items-center justify-between gap-3 border-b border-rule pb-2 last:border-b-0 last:pb-0">
+                  <span className="font-mono text-[12px] text-paper">{String((tool as Record<string, unknown>).name ?? "tool")}</span>
+                  <span className="font-mono text-[11px] text-paper-dim">
+                    {String((tool as Record<string, unknown>).status ?? "ok")} · {String((tool as Record<string, unknown>).items ?? "-")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+      <div className="grid gap-4 border-t border-rule p-4 xl:grid-cols-[1fr_1fr]">
+        <JsonField label="Findings" value={findings} hasContent={findings.length > 0} />
+        <JsonField label="Change requests" value={changeRequests} hasContent={changeRequests.length > 0} />
+      </div>
+    </div>
   );
 }
 
@@ -393,10 +452,57 @@ function traceEntry(event: AgentEvent) {
 }
 
 function eventTone(type: AgentEvent["type"]) {
+  type = String(type ?? "") as AgentEvent["type"];
   if (type.includes("failed") || type.includes("refused")) return "crit" as const;
   if (type.includes("policy") || type.includes("approval")) return "warn" as const;
   if (type.includes("finished") || type.includes("emitted") || type.includes("proposed")) return "ok" as const;
   return "muted" as const;
+}
+
+function syntheticAgentEvents(step: StepRun, assetId: string): AgentEvent[] {
+  const output = step.outputs_redacted ?? {};
+  const modelCall = isRecord(output.model_call) ? output.model_call : {};
+  const tools = Array.isArray(output.tools) ? output.tools : [];
+  const ts = step.finished_at ?? step.started_at ?? new Date().toISOString();
+  const events: AgentEvent[] = [
+    {
+      id: `synthetic-thought-${step.id}`,
+      ts,
+      asset_id: assetId,
+      workflow_step_id: step.step_id,
+      type: "agent.thought",
+      actor: "workflow_agent",
+      payload: {
+        text: typeof modelCall.text === "string" && modelCall.text.length > 0
+          ? modelCall.text
+          : `Reviewed inputs and produced ${Array.isArray(output.findings) ? output.findings.length : 0} finding(s).`,
+        findings_count: Array.isArray(output.findings) ? output.findings.length : 0,
+        model_provider: output.model_provider,
+        model: output.model
+      },
+      hash_chain_prev: "",
+      hash_chain_self: ""
+    }
+  ];
+  for (const [index, raw] of tools.entries()) {
+    const tool = isRecord(raw) ? raw : {};
+    events.push({
+      id: `synthetic-tool-${step.id}-${index}`,
+      ts,
+      asset_id: assetId,
+      workflow_step_id: step.step_id,
+      type: "agent.tool.called",
+      actor: "workflow_agent",
+      payload: {
+        name: tool.name ?? "tool",
+        status: tool.status ?? "ok",
+        args: { items: tool.items ?? 0 }
+      },
+      hash_chain_prev: "",
+      hash_chain_self: ""
+    });
+  }
+  return events;
 }
 
 function compactPairs(value: unknown, keys: string[]) {
