@@ -61,6 +61,7 @@ class ScriptedRun:
 import asyncio
 import json
 import logging
+import os
 import re
 from collections.abc import Awaitable, Callable
 from urllib.error import HTTPError, URLError
@@ -71,6 +72,107 @@ from praetor_api.services.event_stream import append_event, make_event
 logger = logging.getLogger(__name__)
 
 SleepFn = Callable[[float], Awaitable[None]]
+
+
+# ─── GitHub repo fetch (live mode) ────────────────────────────────────────
+# When a run is instantiated with `inputs.repo = "owner/name"` AND a
+# GITHUB_TOKEN is present in the API process env, the `pull` step actually
+# downloads the repo's tarball and caches a slice of source files keyed by
+# run_id. The `scan` step's prompt builder reads those files so the live
+# OpenAI call reasons over real code.
+
+_REPO_CACHE: dict[str, dict[str, Any]] = {}
+
+_REPO_TEXT_SUFFIXES = {
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs",
+    ".go", ".rs", ".java", ".kt", ".rb", ".php",
+    ".c", ".cc", ".cpp", ".cs",
+    ".md", ".txt", ".yaml", ".yml", ".json", ".toml", ".ini", ".env", ".example",
+}
+_REPO_SKIP_PARTS = {".git", "node_modules", ".next", "dist", "build", "__pycache__", "vendor", ".venv", "venv"}
+_REPO_MAX_FILE_BYTES = 64 * 1024
+_REPO_MAX_FILES = 30
+
+
+def _parse_repo_input(inputs: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Pull `(owner, repo, ref)` out of run inputs. Accepts either the
+    deeply-nested `inputs.github.{owner,repo,ref}` shape or a simple
+    `inputs.repo = "owner/name"` (with optional `inputs.ref`)."""
+    gh = inputs.get("github") if isinstance(inputs.get("github"), dict) else None
+    if gh:
+        owner = str(gh.get("owner") or "").strip()
+        repo = str(gh.get("repo") or "").strip().removesuffix(".git")
+        ref = str(gh.get("ref") or "main").strip() or "main"
+        if owner and repo:
+            return owner, repo, ref
+
+    raw = str(inputs.get("repo") or "").strip()
+    if not raw:
+        return None
+    raw = raw.removesuffix(".git").removeprefix("https://github.com/")
+    parts = raw.split("/")
+    if len(parts) < 2:
+        return None
+    owner, repo = parts[0].strip(), parts[1].strip()
+    ref = str(inputs.get("ref") or "main").strip() or "main"
+    if not owner or not repo:
+        return None
+    return owner, repo, ref
+
+
+def _fetch_github_repo(owner: str, repo: str, ref: str, token: str) -> dict[str, Any]:
+    """Synchronously download a GitHub tarball and extract a small slice of
+    text files. Returns `{owner, repo, ref, files: [{path, text}], bytes}`."""
+    import io
+    import tarfile
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/tarball/{ref}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "praetor-demo-simulator",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Authorization": f"Bearer {token}",
+    }
+    request = Request(url, headers=headers, method="GET")
+    with urlopen(request, timeout=45) as response:  # noqa: S310
+        tar_bytes = response.read()
+
+    files: list[dict[str, str]] = []
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as archive:
+        for member in archive.getmembers():
+            if not member.isreg():
+                continue
+            parts = member.name.split("/", 1)
+            relative = parts[1] if len(parts) > 1 else parts[0]
+            if not relative:
+                continue
+            path = relative
+            path_parts = path.split("/")
+            if any(p in _REPO_SKIP_PARTS for p in path_parts):
+                continue
+            suffix = "." + path.rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
+            if suffix not in _REPO_TEXT_SUFFIXES:
+                continue
+            if member.size > _REPO_MAX_FILE_BYTES:
+                continue
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                continue
+            try:
+                text = extracted.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                continue
+            files.append({"path": path, "text": text})
+            if len(files) >= _REPO_MAX_FILES:
+                break
+
+    return {
+        "owner": owner,
+        "repo": repo,
+        "ref": ref,
+        "files": files,
+        "bytes": len(tar_bytes),
+    }
 
 
 # ─── human-gate pause registry ────────────────────────────────────────────
@@ -114,6 +216,31 @@ async def tick_run(
         return
 
     asset_id = script.asset_id
+
+    # Best-effort live GitHub pull: only on workflows that have a `pull`
+    # step and only when both a token and a parseable repo input exist.
+    github_token = os.environ.get("GITHUB_TOKEN")
+    repo_target = _parse_repo_input(run.get("inputs") or {})
+    if (
+        github_token
+        and repo_target
+        and any(s.step_id == "pull" for s in script.steps)
+    ):
+        try:
+            fetched = await asyncio.to_thread(
+                _fetch_github_repo, *repo_target, github_token
+            )
+            _REPO_CACHE[run_id] = fetched
+            logger.info(
+                "live github pull for %s: %s/%s@%s — %d files, %d bytes",
+                run_id, fetched["owner"], fetched["repo"], fetched["ref"],
+                len(fetched["files"]), fetched["bytes"],
+            )
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            logger.warning(
+                "github pull failed for %s (%s); falling back to scripted: %s",
+                run_id, repo_target, exc,
+            )
 
     def _agent_asset_id(step: ScriptedStep) -> str:
         """Per-step workflow_agent asset id.
@@ -250,6 +377,112 @@ async def tick_run(
                     sleep=sleep,
                 )
 
+            # Live propose step: when the run already has live findings
+            # carrying file_path + proposed_change, surface a real-looking
+            # proposed change instead of the scripted patch.
+            if step.step_type == "change.propose":
+                live_proposals = _live_proposals_from_run(run)
+                if live_proposals:
+                    await sleep(1.0)
+                    for proposal in live_proposals:
+                        await append_event(
+                            make_event(
+                                asset_id=asset_id,
+                                workflow_run_id=run_id,
+                                workflow_step_id=step.step_id,
+                                event_type="change.proposed",
+                                actor="workflow_runtime",
+                                payload={
+                                    "proposed_change": proposal,
+                                    "step_id": step.step_id,
+                                    "step_type": step.step_type,
+                                },
+                            )
+                        )
+                    step_record["outputs_redacted"] = {
+                        "proposed": list(live_proposals),
+                        "live": True,
+                    }
+                    run.setdefault("outputs", {}).setdefault(
+                        "proposed_changes", []
+                    ).extend(live_proposals)
+                    step_record["status"] = "succeeded"
+                    run["updated_at"] = _iso_now()
+                    await append_event(
+                        make_event(
+                            asset_id=asset_id,
+                            workflow_run_id=run_id,
+                            workflow_step_id=step.step_id,
+                            event_type="workflow.step.finished",
+                            actor="workflow_runtime",
+                            payload={
+                                "step": step.step_id,
+                                "step_id": step.step_id,
+                                "step_type": step.step_type,
+                                "status": "succeeded",
+                                "outputs_redacted": step_record["outputs_redacted"],
+                            },
+                        )
+                    )
+                    continue
+
+            # Live pull step: replace the scripted hook.in.called with a
+            # real summary of the fetched repo when available.
+            if (
+                step.step_id == "pull"
+                and step.step_type == "hook.in"
+                and run_id in _REPO_CACHE
+            ):
+                fetched = _REPO_CACHE[run_id]
+                await sleep(0.8)
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="hook.in.called",
+                        actor="praetor:hooks",
+                        payload={
+                            "repo_url": f"https://github.com/{fetched['owner']}/{fetched['repo']}",
+                            "ref": fetched["ref"],
+                            "files_fetched": len(fetched["files"]),
+                            "bytes": fetched["bytes"],
+                            "summary": (
+                                f"Pulled {len(fetched['files'])} source files "
+                                f"from {fetched['owner']}/{fetched['repo']}@{fetched['ref']}."
+                            ),
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                        },
+                    )
+                )
+                step_record["outputs_redacted"] = {
+                    "repo_url": f"https://github.com/{fetched['owner']}/{fetched['repo']}",
+                    "ref": fetched["ref"],
+                    "files_fetched": len(fetched["files"]),
+                    "bytes": fetched["bytes"],
+                    "live": True,
+                }
+                step_record["status"] = "succeeded"
+                run["updated_at"] = _iso_now()
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="workflow.step.finished",
+                        actor="workflow_runtime",
+                        payload={
+                            "step": step.step_id,
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                            "status": "succeeded",
+                            "outputs_redacted": step_record["outputs_redacted"],
+                        },
+                    )
+                )
+                continue
+
             if live_findings is None:
                 if not step.events:
                     # Steps with no scripted in-step events still get a small
@@ -331,6 +564,7 @@ async def tick_run(
                 payload={"status": "succeeded"},
             )
         )
+        _REPO_CACHE.pop(run_id, None)
 
     except Exception as exc:  # noqa: BLE001 - record + surface, don't crash the loop
         logger.exception("tick_run failed for %s", run_id)
@@ -346,6 +580,7 @@ async def tick_run(
                 payload={"error": f"{exc.__class__.__name__}: {exc}"},
             )
         )
+        _REPO_CACHE.pop(run_id, None)
 
 
 def _find_step_record(run: dict[str, Any], step_id: str) -> dict[str, Any] | None:
@@ -379,7 +614,7 @@ async def _emit_live_openai_thoughts(
     rationale and a final agent.tool.called(emit_finding). Return parsed
     findings, or None if the call failed for any reason (caller falls
     back to scripted)."""
-    prompt = _build_live_prompt(inputs)
+    prompt = _build_live_prompt(inputs, run_id=run_id)
     logger.info("live OpenAI call starting for %s model=%s", run_id, model)
     try:
         text = await asyncio.to_thread(_call_openai_responses, openai_api_key, model, prompt)
@@ -438,8 +673,95 @@ async def _emit_live_openai_thoughts(
     return findings
 
 
-def _build_live_prompt(inputs: dict[str, Any]) -> str:
+_LIVE_PROMPT_FILE_BUDGET = 12_000  # chars; conservative for gpt-4o-mini context
+_LIVE_PROMPT_PER_FILE_CHARS = 1500
+
+
+def _format_repo_excerpt(fetched: dict[str, Any]) -> str:
+    """Pick a few likely-interesting source files from the fetched repo and
+    fence them so they fit comfortably in the prompt."""
+    files = fetched.get("files", []) or []
+    # Prefer source files over docs/configs.
+    code_suffixes = {".py", ".ts", ".tsx", ".js", ".go", ".rs", ".java", ".rb", ".php"}
+
+    def score(f: dict[str, Any]) -> tuple[int, int]:
+        path = f.get("path", "")
+        suffix = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        is_code = 0 if suffix in code_suffixes else 1
+        # shorter paths first within their tier so we get top-level files
+        return (is_code, len(path))
+
+    ordered = sorted(files, key=score)
+    used = 0
+    blocks: list[str] = []
+    for f in ordered:
+        text = f.get("text", "") or ""
+        slice_ = text[:_LIVE_PROMPT_PER_FILE_CHARS]
+        if not slice_.strip():
+            continue
+        block = f"--- {f['path']} ---\n{slice_}"
+        if used + len(block) > _LIVE_PROMPT_FILE_BUDGET:
+            break
+        blocks.append(block)
+        used += len(block)
+        if len(blocks) >= 8:
+            break
+    if not blocks:
+        return ""
+    header = (
+        f"Repository: {fetched['owner']}/{fetched['repo']}@{fetched['ref']} "
+        f"({len(files)} files, {fetched.get('bytes', 0)} bytes downloaded). "
+        f"Source excerpt:\n"
+    )
+    return header + "\n\n".join(blocks)
+
+
+def _build_live_prompt(inputs: dict[str, Any], *, run_id: str | None = None) -> str:
     inputs_block = json.dumps(inputs, sort_keys=True, indent=2) if inputs else "{}"
+    fetched = _REPO_CACHE.get(run_id) if run_id else None
+    repo_excerpt = _format_repo_excerpt(fetched) if fetched else ""
+
+    if repo_excerpt:
+        return (
+            "You are Praetor's governed compliance workflow agent running a "
+            "code compliance scan against the repository below. The files "
+            "are real source pulled from GitHub via authenticated download.\n\n"
+            f"{repo_excerpt}\n\n"
+            "Relevant obligations:\n"
+            "- ISO 42001 §8.3: Outbound communication primitives MUST validate "
+            "the recipient against an allowlist before transmission.\n"
+            "- Internal data-minimization policy: privileged tools MUST log a "
+            "structured audit record per call.\n"
+            "- OWASP A03 Injection: untrusted input must never reach `eval`, "
+            "`exec`, `shell=True`, or unparameterised SQL.\n"
+            "- Hardcoded secrets policy: never commit API keys, passwords, or "
+            "tokens; always source from a managed secret store.\n\n"
+            "Identify concrete compliance findings in this repository. Cite "
+            "the relevant obligation by URN (e.g. "
+            "`urn:praetor:obligation:demo:iso-42001-8-3`) and reference the "
+            "exact file path + line range when describing each finding. If you "
+            "see a remediation, propose a concrete change in the "
+            "`proposed_change` field.\n\n"
+            "Respond with a single JSON object inside a ```json fenced block:\n"
+            "{\n"
+            '  "thinking": "one-paragraph auditable rationale",\n'
+            '  "findings": [\n'
+            "    {\n"
+            '      "title": "short title",\n'
+            '      "description": "what is wrong, where, and why it violates the obligation",\n'
+            '      "severity": "low | medium | high | critical",\n'
+            '      "confidence": 0.0-1.0,\n'
+            '      "obligations_cited": ["urn:praetor:obligation:demo:..."],\n'
+            '      "file_path": "relative path",\n'
+            '      "proposed_change": "short suggested patch or remediation"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            f"Workflow inputs:\n{inputs_block}"
+        )
+
+    # Fallback: no repo fetched (no token or no inputs.repo). Use the
+    # synthetic Northwind example so the demo still produces real findings.
     return (
         "You are Praetor's governed compliance workflow agent running a "
         "code compliance scan against a small support-bot repository.\n\n"
@@ -454,18 +776,16 @@ def _build_live_prompt(inputs: dict[str, Any]) -> str:
         "        raise ValueError('refund cap exceeded')\n"
         "    return billing.refund(customer_id, amount)\n"
         "```\n\n"
-        "Relevant obligations (corpus excerpt):\n"
+        "Relevant obligations:\n"
         "- ISO 42001 §8.3: Outbound communication primitives MUST validate "
         "the recipient against an allowlist before transmission.\n"
         "- Internal data-minimization policy: privileged tools MUST log a "
         "structured audit record per call.\n\n"
-        "Identify any compliance gaps in the code above. Cite the relevant "
-        "obligation by URN (e.g. `urn:praetor:obligation:demo:iso-42001-8-3`). "
+        "Identify any compliance gaps. Cite the relevant obligation by URN. "
         "Be specific about which line(s) violate which obligation.\n\n"
-        "Respond with a single JSON object inside a ```json fenced block "
-        "with this shape:\n"
+        "Respond with a single JSON object inside a ```json fenced block:\n"
         "{\n"
-        '  "thinking": "short auditable rationale (one paragraph max)",\n'
+        '  "thinking": "one-paragraph rationale",\n'
         '  "findings": [\n'
         "    {\n"
         '      "title": "short title",\n'
@@ -547,21 +867,62 @@ def _normalise_findings(value: Any) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             confidence = 0.7
         confidence = max(0.0, min(1.0, confidence))
-        out.append(
+        record = {
+            "id": str(raw.get("id") or f"fnd_live_{index + 1}"),
+            "title": str(raw.get("title") or "Compliance finding")[:240],
+            "description": str(raw.get("description") or "")[:1200],
+            "severity": severity,
+            "confidence": confidence,
+            "obligations_cited": [
+                str(urn) for urn in (raw.get("obligations_cited") or []) if isinstance(urn, str)
+            ],
+            "documents_cited": raw.get("documents_cited") if isinstance(raw.get("documents_cited"), list) else [],
+            "status": "open",
+        }
+        if isinstance(raw.get("file_path"), str) and raw["file_path"].strip():
+            record["file_path"] = raw["file_path"].strip()[:240]
+        if isinstance(raw.get("proposed_change"), str) and raw["proposed_change"].strip():
+            record["proposed_change"] = raw["proposed_change"].strip()[:1500]
+        out.append(record)
+    return out
+
+
+def _live_proposals_from_run(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build proposed_change records from any live findings on the run that
+    carry `file_path` + `proposed_change`. Returns [] when none qualify."""
+    findings = (run.get("outputs") or {}).get("findings") or []
+    proposals: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        change_text = finding.get("proposed_change")
+        file_path = finding.get("file_path")
+        if not isinstance(change_text, str) or not change_text.strip():
+            continue
+        if not isinstance(file_path, str) or not file_path.strip():
+            continue
+        pid = f"pc_live_{finding.get('id', 'finding')}"[:120]
+        diff_body = (
+            f"--- a/{file_path}\n"
+            f"+++ b/{file_path}\n"
+            f"@@ remediation suggestion @@\n"
+            + "\n".join(f"+ {line}" for line in change_text.splitlines() if line.strip())
+        )
+        proposals.append(
             {
-                "id": str(raw.get("id") or f"fnd_live_{index + 1}"),
-                "title": str(raw.get("title") or "Compliance finding")[:240],
-                "description": str(raw.get("description") or "")[:1200],
-                "severity": severity,
-                "confidence": confidence,
-                "obligations_cited": [
-                    str(urn) for urn in (raw.get("obligations_cited") or []) if isinstance(urn, str)
-                ],
-                "documents_cited": raw.get("documents_cited") if isinstance(raw.get("documents_cited"), list) else [],
-                "status": "open",
+                "id": pid,
+                "urn": f"urn:praetor:proposed_change:demo:{pid}",
+                "finding_id": finding.get("id"),
+                "kind": "code",
+                "diff_format": "unified",
+                "diff": diff_body,
+                "obligations_addressed": list(finding.get("obligations_cited") or []),
+                "residual_risk_estimate": "Medium until reviewed and merged.",
+                "status": "proposed",
+                "live": True,
             }
         )
-    return out
+    return proposals
 
 
 def _chunk_rationale(text: str, *, n: int) -> list[str]:

@@ -147,7 +147,8 @@ export default function WorkflowRunPage({ params }: { params: Promise<{ id: stri
                     size="sm"
                     variant="primary"
                     onClick={async () => {
-                      await api.workflowRuns.resume(run.id, true);
+                      const next = await api.workflowRuns.resume(run.id, true);
+                      if (next) setRun(next);
                     }}
                   >
                     approve
@@ -156,7 +157,8 @@ export default function WorkflowRunPage({ params }: { params: Promise<{ id: stri
                     size="sm"
                     variant="danger"
                     onClick={async () => {
-                      await api.workflowRuns.resume(run.id, false);
+                      const next = await api.workflowRuns.resume(run.id, false);
+                      if (next) setRun(next);
                     }}
                   >
                     reject
