@@ -95,9 +95,13 @@ _REPO_MAX_FILES = 30
 
 
 def _parse_repo_input(inputs: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Pull `(owner, repo, ref)` out of run inputs. Accepts either the
-    deeply-nested `inputs.github.{owner,repo,ref}` shape or a simple
-    `inputs.repo = "owner/name"` (with optional `inputs.ref`)."""
+    """Pull `(owner, repo, ref)` out of run inputs.
+
+    Accepts:
+    - `inputs.github = {owner, repo, ref}` (canonical)
+    - `inputs.repo = "owner/name"` (short form)
+    - `inputs.repo_url = "https://github.com/owner/name"` (form default)
+    """
     gh = inputs.get("github") if isinstance(inputs.get("github"), dict) else None
     if gh:
         owner = str(gh.get("owner") or "").strip()
@@ -106,15 +110,24 @@ def _parse_repo_input(inputs: dict[str, Any]) -> tuple[str, str, str] | None:
         if owner and repo:
             return owner, repo, ref
 
-    raw = str(inputs.get("repo") or "").strip()
-    if not raw:
+    raw = str(inputs.get("repo") or inputs.get("repo_url") or "").strip()
+    if not raw or raw.startswith("stub://"):
         return None
-    raw = raw.removesuffix(".git").removeprefix("https://github.com/")
+    raw = (
+        raw.removesuffix(".git")
+        .removeprefix("https://github.com/")
+        .removeprefix("http://github.com/")
+        .removeprefix("git@github.com:")
+        .strip("/")
+    )
     parts = raw.split("/")
     if len(parts) < 2:
         return None
     owner, repo = parts[0].strip(), parts[1].strip()
-    ref = str(inputs.get("ref") or "main").strip() or "main"
+    ref = (
+        str(inputs.get("ref") or inputs.get("github_ref") or "main").strip()
+        or "main"
+    )
     if not owner or not repo:
         return None
     return owner, repo, ref
@@ -425,6 +438,63 @@ async def tick_run(
                         )
                     )
                     continue
+
+            # Live hook.out (open_pr) step: emit a real-looking URL
+            # tied to the fetched repo instead of the hardcoded fake.
+            if (
+                step.step_type == "hook.out"
+                and run_id in _REPO_CACHE
+            ):
+                fetched = _REPO_CACHE[run_id]
+                pr_number = abs(hash(run_id)) % 9000 + 1000
+                pr_url = (
+                    f"https://github.com/{fetched['owner']}/{fetched['repo']}/pull/{pr_number}"
+                )
+                await sleep(1.0)
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="hook.out.called",
+                        actor="praetor:hooks",
+                        payload={
+                            "target": f"github://{fetched['owner']}/{fetched['repo']}#open_pr",
+                            "pr_url": pr_url,
+                            "ok": True,
+                            "note": (
+                                "Demo: PR not actually pushed (read-only token). "
+                                "URL points at the live repo for review only."
+                            ),
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                        },
+                    )
+                )
+                step_record["outputs_redacted"] = {
+                    "pr_url": pr_url,
+                    "live": True,
+                    "note": "Demo open_pr surface — no actual PR pushed.",
+                }
+                step_record["status"] = "succeeded"
+                run["updated_at"] = _iso_now()
+                await append_event(
+                    make_event(
+                        asset_id=asset_id,
+                        workflow_run_id=run_id,
+                        workflow_step_id=step.step_id,
+                        event_type="workflow.step.finished",
+                        actor="workflow_runtime",
+                        payload={
+                            "step": step.step_id,
+                            "step_id": step.step_id,
+                            "step_type": step.step_type,
+                            "status": "succeeded",
+                            "outputs_redacted": step_record["outputs_redacted"],
+                        },
+                    )
+                )
+                continue
 
             # Live pull step: replace the scripted hook.in.called with a
             # real summary of the fetched repo when available.

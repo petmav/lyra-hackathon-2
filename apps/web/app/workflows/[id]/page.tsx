@@ -375,9 +375,16 @@ function formatBreakdownValue(value: unknown): string {
 function defaultInputsFor(workflow: Workflow): Record<string, unknown> {
   const inputs: Record<string, unknown> = {};
   if ("repo_url" in workflow.inputs_schema || workflow.id.includes("code_compliance_scan")) {
-    inputs.repo_url = workflow.id === "github_corpus_code_compliance"
-      ? "https://github.com/petmav/lyra-hackathon-2"
-      : "stub://support-bot";
+    if (workflow.id === "github_corpus_code_compliance") {
+      inputs.repo_url = "https://github.com/petmav/lyra-hackathon-2";
+    } else if (workflow.id === "code_compliance_scan_full") {
+      // Demo default: a small public repo with real source. Replace with
+      // your own owner/name to scan a different repo.
+      inputs.repo_url = "https://github.com/pallets/click";
+      inputs.ref = "main";
+    } else {
+      inputs.repo_url = "stub://support-bot";
+    }
   }
   if ("corpus_ids" in workflow.inputs_schema || workflow.required_corpora.length > 0) {
     inputs.corpus_ids = workflow.required_corpora.length > 0 ? workflow.required_corpora : ["iso_42001", "internal_data_min"];

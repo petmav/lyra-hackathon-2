@@ -266,10 +266,17 @@ async def resume_workflow(run_id: str, request: ResumeWorkflowRequest) -> dict[s
         raise HTTPException(status_code=404, detail="workflow run not found") from None
 
     from praetor_api.services.demo_simulator import signal_resume
+    import asyncio as _asyncio
 
     if signal_resume(run_id, approved=request.approved):
-        # Simulator was paused on a human gate; it'll drive the run to the
-        # terminal state itself. Return the current snapshot.
+        # Simulator was paused on a human gate. Wait briefly for it to
+        # leave awaiting_approval so the response carries the updated
+        # status; the UI's button-visibility check uses that to swap the
+        # approve/reject buttons out as soon as the click resolves.
+        for _ in range(40):  # up to ~2s in 50ms slices
+            if RUNS.get(run_id, {}).get("status") != "awaiting_approval":
+                break
+            await _asyncio.sleep(0.05)
         return run
 
     # No pending gate — fall back to the legacy behaviour (one-shot flip).
