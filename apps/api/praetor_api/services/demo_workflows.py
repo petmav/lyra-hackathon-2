@@ -136,10 +136,11 @@ async def run_workflow(
                 "step_type": step.step_type,
                 "status": "pending",
                 "outputs_redacted": {},
+                "depends_on": [script.steps[i - 1].step_id] if i > 0 else [],
                 "model_provider": model_provider if step.step_type == "agent" else None,
                 "model": model if step.step_type == "agent" else None,
             }
-            for step in script.steps
+            for i, step in enumerate(script.steps)
         ],
     }
     RUNS[run_id] = run

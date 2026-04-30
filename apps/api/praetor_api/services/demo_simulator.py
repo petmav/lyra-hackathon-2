@@ -143,6 +143,10 @@ async def tick_run(
                 )
 
             if live_findings is None:
+                if not step.events:
+                    # Steps with no scripted in-step events still get a small
+                    # dwell so the DAG visibly progresses.
+                    await sleep(0.8)
                 for scripted in step.events:
                     if scripted.delay_before > 0:
                         await sleep(scripted.delay_before)
@@ -427,11 +431,11 @@ def _chunk_rationale(text: str, *, n: int) -> list[str]:
 # ─── Scripted runs ────────────────────────────────────────────────────────
 
 
-def _thought(text: str, *, actor: str = "workflow_agent", delay: float = 0.6) -> ScriptedEvent:
+def _thought(text: str, *, actor: str = "workflow_agent", delay: float = 1.6) -> ScriptedEvent:
     return ScriptedEvent(type="agent.thought", actor=actor, payload={"text": text}, delay_before=delay)
 
 
-def _tool(name: str, *, args: dict[str, Any] | None = None, delay: float = 0.4) -> ScriptedEvent:
+def _tool(name: str, *, args: dict[str, Any] | None = None, delay: float = 1.0) -> ScriptedEvent:
     return ScriptedEvent(
         type="agent.tool.called",
         actor="workflow_agent",
@@ -440,7 +444,7 @@ def _tool(name: str, *, args: dict[str, Any] | None = None, delay: float = 0.4) 
     )
 
 
-def _hook_in(repo: str, *, delay: float = 0.4) -> ScriptedEvent:
+def _hook_in(repo: str, *, delay: float = 1.4) -> ScriptedEvent:
     return ScriptedEvent(
         type="hook.in.called",
         actor="praetor:hooks",
@@ -449,7 +453,7 @@ def _hook_in(repo: str, *, delay: float = 0.4) -> ScriptedEvent:
     )
 
 
-def _corpus_query(query: str, corpus_id: str, chunks: int, *, delay: float = 0.4) -> ScriptedEvent:
+def _corpus_query(query: str, corpus_id: str, chunks: int, *, delay: float = 1.6) -> ScriptedEvent:
     return ScriptedEvent(
         type="corpus.query.called",
         actor="praetor:corpus",
@@ -458,7 +462,7 @@ def _corpus_query(query: str, corpus_id: str, chunks: int, *, delay: float = 0.4
     )
 
 
-def _policy_decision(package: str, outcome: str, *, delay: float = 0.3) -> ScriptedEvent:
+def _policy_decision(package: str, outcome: str, *, delay: float = 0.7) -> ScriptedEvent:
     return ScriptedEvent(
         type="policy.decision.hot",
         actor="praetor:policy",
@@ -467,7 +471,7 @@ def _policy_decision(package: str, outcome: str, *, delay: float = 0.3) -> Scrip
     )
 
 
-def _human_gate(*, delay: float = 0.4) -> ScriptedEvent:
+def _human_gate(*, delay: float = 0.8) -> ScriptedEvent:
     return ScriptedEvent(
         type="human.gate.opened",
         actor="praetor:runtime",
@@ -485,7 +489,7 @@ def _human_resolve(approver: str = "demo:reviewer", *, delay: float = 5.0) -> Sc
     )
 
 
-def _hook_out(target: str, *, delay: float = 0.6) -> ScriptedEvent:
+def _hook_out(target: str, *, delay: float = 1.5) -> ScriptedEvent:
     return ScriptedEvent(
         type="hook.out.called",
         actor="praetor:hooks",
@@ -494,7 +498,7 @@ def _hook_out(target: str, *, delay: float = 0.6) -> ScriptedEvent:
     )
 
 
-def _finding_emitted(finding: dict[str, Any], *, delay: float = 0.3) -> ScriptedEvent:
+def _finding_emitted(finding: dict[str, Any], *, delay: float = 0.8) -> ScriptedEvent:
     return ScriptedEvent(
         type="finding.emitted",
         actor="workflow_runtime",
@@ -503,7 +507,7 @@ def _finding_emitted(finding: dict[str, Any], *, delay: float = 0.3) -> Scripted
     )
 
 
-def _change_proposed(proposal: dict[str, Any], *, delay: float = 0.4) -> ScriptedEvent:
+def _change_proposed(proposal: dict[str, Any], *, delay: float = 1.0) -> ScriptedEvent:
     return ScriptedEvent(
         type="change.proposed",
         actor="workflow_runtime",

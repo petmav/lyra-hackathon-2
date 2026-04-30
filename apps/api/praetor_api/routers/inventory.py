@@ -4,7 +4,7 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel, Field
 
 from praetor_api.db import AsyncSessionLocal
-from praetor_api.services import production_inventory
+from praetor_api.services import demo_state, production_inventory
 from praetor_api.settings import get_settings
 
 router = APIRouter(tags=["inventory"])
@@ -36,12 +36,19 @@ class ObligationYamlImport(BaseModel):
 
 @router.get("/assets")
 async def assets() -> list[dict]:
+    if get_settings().data_mode != "production":
+        return list(demo_state.DEMO_ASSETS.values())
     async with AsyncSessionLocal() as session:
         return await production_inventory.list_assets(session)
 
 
 @router.get("/assets/{asset_id}")
 async def asset(asset_id: str) -> dict:
+    if get_settings().data_mode != "production":
+        found = demo_state.DEMO_ASSETS.get(asset_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="asset not found")
+        return found
     async with AsyncSessionLocal() as session:
         found = await production_inventory.get_asset(session, asset_id)
     if found is None:
@@ -51,6 +58,8 @@ async def asset(asset_id: str) -> dict:
 
 @router.get("/assets/{asset_id}/children")
 async def asset_children(asset_id: str) -> list[dict]:
+    if get_settings().data_mode != "production":
+        return []
     async with AsyncSessionLocal() as session:
         return await production_inventory.child_assets(session, asset_id)
 

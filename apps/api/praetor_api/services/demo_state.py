@@ -9,6 +9,79 @@ EVIDENCE_RECORDS: dict[str, dict[str, Any]] = {}
 AUDIT_PACKETS: dict[str, dict[str, Any]] = {}
 
 
+def _asset(
+    *,
+    aid: str,
+    type: str,
+    name: str,
+    description: str,
+    owner: str = "demo",
+    risk_tier: str = "L2",
+    lifecycle: str = "governed",
+) -> dict[str, Any]:
+    iso = "2026-01-15T00:00:00+00:00"
+    return {
+        "id": aid,
+        "urn": f"urn:praetor:asset:demo:{aid}",
+        "created_at": iso,
+        "updated_at": iso,
+        "created_by": "demo:seed",
+        "version": 1,
+        "type": type,
+        "name": name,
+        "description": description,
+        "owner_id": owner,
+        "risk_tier": risk_tier,
+        "lifecycle": lifecycle,
+        "parent_asset_id": None,
+        "jurisdictions": [],
+        "data_classifications": [],
+        "sectors": [],
+        "tags": [],
+        "fingerprint": "0" * 64,
+        "metadata": {},
+        "config": {"external_id": aid},
+    }
+
+
+DEMO_ASSETS: dict[str, dict[str, Any]] = {
+    "asset_northwind_support_bot": _asset(
+        aid="asset_northwind_support_bot",
+        type="ai_system",
+        name="Northwind support-bot",
+        description="Customer-facing chat assistant with email + refund tools.",
+        risk_tier="L3",
+    ),
+    "asset_acme_vendor": _asset(
+        aid="asset_acme_vendor",
+        type="ai_system",
+        name="Acme vendor — third-party SaaS",
+        description="Vendor whose SOC2 attestation is under review.",
+    ),
+    "asset_policy_corpus": _asset(
+        aid="asset_policy_corpus",
+        type="dataset",
+        name="Internal policy corpus",
+        description="Existing internal control documents and policies.",
+    ),
+    "asset_evidence_q1": _asset(
+        aid="asset_evidence_q1",
+        type="dataset",
+        name="Q1 evidence bundle",
+        description="Raw artefacts collected for the Q1 audit window.",
+        risk_tier="L1",
+    ),
+    "asset_chat_summary_v2": _asset(
+        aid="asset_chat_summary_v2",
+        type="ai_system",
+        name="Chat-summary v2",
+        description="Customer-facing PII-aware summarisation tool, intake under review.",
+        risk_tier="L3",
+        lifecycle="classified",
+    ),
+}
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 

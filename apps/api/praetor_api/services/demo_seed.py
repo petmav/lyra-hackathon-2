@@ -177,7 +177,7 @@ def _build_succeeded_run(
 ) -> dict[str, Any]:
     cursor = triggered_at
     step_runs: list[dict[str, Any]] = []
-    for step in script.steps:
+    for i, step in enumerate(script.steps):
         step_started = cursor
         cursor = cursor + timedelta(seconds=2)
         step_runs.append(
@@ -186,6 +186,7 @@ def _build_succeeded_run(
                 "step_type": step.step_type,
                 "status": "succeeded",
                 "outputs_redacted": dict(step.final_outputs),
+                "depends_on": [script.steps[i - 1].step_id] if i > 0 else [],
                 "started_at": step_started.isoformat(),
                 "finished_at": cursor.isoformat(),
                 "model_provider": "openai" if step.step_type == "agent" else None,
