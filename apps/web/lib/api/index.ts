@@ -888,14 +888,17 @@ function normalizeWorkflow(row: Record<string, unknown>): Workflow {
   };
 }
 
-function resolveWorkflowGraph(row: Record<string, unknown>, fixture?: { definition?: string; required_corpora?: string[] }): Workflow["graph"] | undefined {
+function resolveWorkflowGraph(row: Record<string, unknown>, fixture?: { definition?: string; required_corpora?: string[]; graph?: Workflow["graph"] }): Workflow["graph"] | undefined {
   if (row.graph && typeof row.graph === "object") return row.graph as Workflow["graph"];
   // Fallback: parse the fixture's YAML-ish `definition` block to derive a
   // minimal step list so the visual canvas renders identically in fixture
   // mode. Matches the backend's compile_steps_to_graph() phase mapping.
   const definition = typeof row.definition === "string" ? row.definition : fixture?.definition;
   if (typeof definition !== "string") return undefined;
-  const steps = parseStepsFromYaml(definition);
+  const steps = parseStepsFromYaml(definition).length
+    ? parseStepsFromYaml(definition)
+    : parseStepsFromArrowChain(definition);
+  if (!steps.length && fixture?.graph) return fixture.graph;
   if (!steps.length) return undefined;
   return compileStepsToGraph(steps);
 }
@@ -927,6 +930,32 @@ function parseStepsFromYaml(yaml: string): Array<{ id: string; type: string; dep
   }
   if (current?.id && current.type) out.push({ id: current.id, type: current.type, depends_on: current.depends_on });
   return out;
+}
+
+function parseStepsFromArrowChain(definition: string): Array<{ id: string; type: string; depends_on?: string[] }> {
+  if (!definition.includes("->")) return [];
+  const ids = definition
+    .split("->")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return ids.map((id, index) => ({
+    id,
+    type: inferStepType(id),
+    depends_on: index === 0 ? [] : [ids[index - 1]]
+  }));
+}
+
+function inferStepType(id: string): string {
+  const normalized = id.toLowerCase();
+  if (normalized.includes("retrieve") || normalized.includes("controls") || normalized.includes("obligations")) return "corpus.query";
+  if (normalized.includes("scan") || normalized.includes("analyze") || normalized.includes("classify") || normalized.includes("organize")) return "agent";
+  if (normalized.includes("emit")) return "finding.emit";
+  if (normalized.includes("propose")) return "change.propose";
+  if (normalized.includes("policy_gate")) return "gate.policy";
+  if (normalized.includes("human_gate") || normalized.includes("approve")) return "gate.human";
+  if (normalized.includes("open_pr") || normalized.includes("dispatch") || normalized.includes("notify")) return "hook.out";
+  if (normalized.includes("pull") || normalized.includes("load") || normalized.includes("read") || normalized.includes("intake")) return "hook.in";
+  return "transform";
 }
 
 const PRE_TYPES = new Set(["trigger.manual", "trigger.schedule", "trigger.webhook", "trigger.event", "hook.in", "corpus.query"]);

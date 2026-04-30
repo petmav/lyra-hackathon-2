@@ -33,6 +33,8 @@ export function Drawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  if (!open) return null;
+
   const widthClass =
     width === "narrow" ? "w-[420px]" : width === "xl" ? "w-[780px]" : "w-[560px]";
 
@@ -53,7 +55,7 @@ export function Drawer({
           "fixed right-0 top-0 z-50 h-full max-w-[100vw] bg-ink-2 border-l border-rule",
           "transition-transform duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
           widthClass,
-          open ? "translate-x-0" : "translate-x-full"
+          "translate-x-0"
         )}
       >
         <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-rule bg-ink-2 px-6 py-4">

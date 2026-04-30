@@ -4,6 +4,7 @@
   "private": true,
   "description": "Praetor hackathon monorepo.",
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "dev": "npm run demo",
     "demo": "node scripts/run-stack.mjs demo all",
     "prod": "node scripts/run-stack.mjs production all",

@@ -34,7 +34,7 @@ export default async function DashboardPage() {
   const liveRuns = runs.filter((r) => r.status === "running" || r.status === "awaiting_approval");
   const primaryRun = liveRuns[0] ?? runs[0];
   const openFindings = findings.filter((f) => f.status === "open");
-  const supervisedAgents = assets.filter((a) => a.type === "agent");
+  const supervisedAgents = assets.filter((a) => a.type === "agent" || a.type === "ai_system");
   const workflowAgents = assets.filter((a) => a.type === "workflow_agent");
 
   return (

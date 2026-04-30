@@ -86,9 +86,9 @@ export default async function WorkflowsPage() {
                       </Button>
                     </Link>
                   )}
-                  <Link href={`/workflows/${w.id}`}>
+                  <Link href={`/workflows/${w.id}`} aria-label={`Open ${w.name}`}>
                     <Button size="sm" variant="primary">
-                      instantiate
+                      open
                       <ArrowUpRight size={11} strokeWidth={1.5} />
                     </Button>
                   </Link>

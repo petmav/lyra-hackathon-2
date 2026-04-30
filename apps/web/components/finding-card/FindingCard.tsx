@@ -49,24 +49,42 @@ export function FindingCard({
           {finding.description}
         </p>
       )}
-      {!compact && finding.documents_cited.length > 0 && (
+      {!compact && (finding.obligations_cited.length > 0 || finding.documents_cited.length > 0) && (
         <>
           <div className="my-4 h-px bg-rule" />
-          <div className="smallcaps mb-3">Citations</div>
-          <ol className="flex flex-col gap-3 list-decimal list-inside marker:text-paper-fade marker:font-mono marker:text-[10.5px]">
-            {finding.documents_cited.map((raw, i) => {
-              const c = normalizeCitation(raw, i);
-              return (
-              <li key={`${c.document_id}-${c.chunk_ord}`} className="pl-2">
-                <Citation
-                  framework={frameworkFromTitle(c.document_title)}
-                  path={c.citation_path}
-                  excerpt={c.excerpt}
-                  className="inline-block ml-2"
-                />
-              </li>
-            );})}
-          </ol>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {finding.obligations_cited.length > 0 && (
+              <div>
+                <div className="smallcaps mb-3">Obligations cited</div>
+                <ul className="flex flex-col gap-2">
+                  {finding.obligations_cited.map((urn) => (
+                    <li key={urn}>
+                      <Urn urn={urn} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {finding.documents_cited.length > 0 && (
+              <div>
+                <div className="smallcaps mb-3">Document citations</div>
+                <ol className="flex flex-col gap-3 list-decimal list-inside marker:text-paper-fade marker:font-mono marker:text-[10.5px]">
+                  {finding.documents_cited.map((raw, i) => {
+                    const c = normalizeCitation(raw, i);
+                    return (
+                    <li key={`${c.document_id}-${c.chunk_ord}`} className="pl-2">
+                      <Citation
+                        framework={frameworkFromTitle(c.document_title)}
+                        path={c.citation_path}
+                        excerpt={c.excerpt}
+                        className="inline-block ml-2"
+                      />
+                    </li>
+                  );})}
+                </ol>
+              </div>
+            )}
+          </div>
         </>
       )}
       {!compact && finding.proposed_change_ids.length > 0 && (

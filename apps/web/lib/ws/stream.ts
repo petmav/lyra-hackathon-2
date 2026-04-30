@@ -96,7 +96,11 @@ export function useEventStream(topic: StreamTopic, opts: { live?: boolean } = {}
       };
       return () => {
         cancelled = true;
-        socket.close();
+        if (socket.readyState === WebSocket.CONNECTING) {
+          socket.onopen = () => socket.close();
+        } else {
+          socket.close();
+        }
       };
     }
 
