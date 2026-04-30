@@ -77,7 +77,7 @@ export default async function WorkflowsPage() {
                     </span>
                   </div>
                 </div>
-                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   {w.template_origin === "user-defined" && (
                     <Link href={`/workflows/${w.id}/edit`}>
                       <Button size="sm" variant="ghost">

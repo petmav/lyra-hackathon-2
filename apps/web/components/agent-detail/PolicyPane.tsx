@@ -26,7 +26,7 @@ const VISIBLE_TYPES = new Set([
 export function PolicyPane({ events }: { events: AgentEvent[] }) {
   const decisions = events.filter((e) => VISIBLE_TYPES.has(e.type));
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b border-rule bg-ink-2 px-4 py-2.5">
         <div className="smallcaps">Policy · Decisions · Evidence</div>
         <span className="font-mono text-[10.5px] text-paper-fade tabular-nums">

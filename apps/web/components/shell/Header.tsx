@@ -58,18 +58,18 @@ export function Header() {
   }, []);
 
   return (
-    <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-rule bg-ink/85 backdrop-blur-md px-6">
-      <div className="flex items-center gap-3 text-[12px] text-paper-dim">
-        <span className="font-mono tabular-nums text-paper-fade min-w-[160px]" suppressHydrationWarning>
+    <header className="sticky top-0 z-20 flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-rule bg-ink/85 px-3 py-2 backdrop-blur-md md:h-12 md:flex-nowrap md:px-6 md:py-0">
+      <div className="flex min-w-0 items-center gap-2 text-[11px] text-paper-dim sm:gap-3 sm:text-[12px]">
+        <span className="min-w-0 whitespace-nowrap font-mono tabular-nums text-paper-fade sm:min-w-[160px]" suppressHydrationWarning>
           {now ?? "—"}
         </span>
-        <span aria-hidden className="h-3 w-px bg-rule" />
-        <span>
+        <span aria-hidden className="hidden h-3 w-px bg-rule sm:block" />
+        <span className="hidden sm:inline">
           <span className="text-paper-fade">Governed assets</span>{" "}
           <span className="font-mono text-paper tabular-nums">{stats ? stats.assets : "—"}</span>
         </span>
-        <span aria-hidden className="h-3 w-px bg-rule" />
-        <span>
+        <span aria-hidden className="hidden h-3 w-px bg-rule sm:block" />
+        <span className="hidden sm:inline">
           <span className="text-paper-fade">Live workflows</span>{" "}
           <span className="font-mono text-paper tabular-nums">{stats ? stats.live : "—"}</span>
         </span>

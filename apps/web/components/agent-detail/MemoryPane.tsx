@@ -20,7 +20,7 @@ export function MemoryPane({ events }: { events: AgentEvent[] }) {
     (e) => e.type === "agent.memory.write" || e.type === "agent.memory.read"
   );
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b border-rule bg-ink-2 px-4 py-2.5">
         <div className="smallcaps">Memory · Provenance · Quarantine</div>
         <span className="font-mono text-[10.5px] text-paper-fade tabular-nums">

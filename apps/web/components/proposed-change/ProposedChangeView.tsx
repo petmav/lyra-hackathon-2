@@ -26,6 +26,7 @@ export function ProposedChangeView({ change, compact }: { change: ProposedChange
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const status = change.status ?? "awaiting_approval";
   const risk = typeof change.residual_risk_estimate === "number" ? change.residual_risk_estimate : 0;
+  const hasReplayResults = (change.sandbox_result?.cases?.length ?? 0) > 0;
 
   return (
     <div className="border border-rule rounded-sm">
@@ -77,9 +78,9 @@ export function ProposedChangeView({ change, compact }: { change: ProposedChange
         )}
       </header>
 
-      <div className={cn("grid", compact ? "grid-cols-1" : "xl:grid-cols-[1.6fr_1fr]")}>
-        <DiffView diff={change.diff} format={change.diff_format} compact={compact} />
-        <ReplayResults change={change} />
+      <div className={cn("grid", compact || !hasReplayResults ? "grid-cols-1" : "xl:grid-cols-[1.6fr_1fr]")}>
+        <DiffView diff={change.diff} format={change.diff_format} compact={compact || !hasReplayResults} />
+        {hasReplayResults && <ReplayResults change={change} />}
       </div>
     </div>
   );

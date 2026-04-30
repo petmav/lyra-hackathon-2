@@ -31,7 +31,7 @@ const VISIBLE_TYPES = new Set([
 export function ThoughtsPane({ events }: { events: AgentEvent[] }) {
   const filtered = events.filter((e) => typeof e.type === "string" && VISIBLE_TYPES.has(e.type));
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col">
       <PaneHeader label="Thoughts · Tools · Boundary" count={filtered.length} />
       <ul className="flex-1 overflow-y-auto">
         {filtered.length === 0 && (

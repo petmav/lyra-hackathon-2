@@ -28,7 +28,7 @@ export function PageHeader({
           {kicker}
         </div>
       )}
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="min-w-0 flex-1">
           <h1 className="text-[22px] font-semibold tracking-tight text-paper leading-tight">
             {title}
@@ -39,7 +39,7 @@ export function PageHeader({
             </div>
           )}
         </div>
-        {aside && <div className="shrink-0">{aside}</div>}
+        {aside && <div className="shrink-0 self-start">{aside}</div>}
       </div>
       {children && <div className="mt-5">{children}</div>}
     </header>

@@ -37,8 +37,8 @@ export function AgentDetail({
   compact?: boolean;
 }) {
   return (
-    <div className={cn("flex flex-col border border-rule bg-ink-2", compact ? "h-[460px]" : "h-[640px]")}>
-      <header className="flex items-center justify-between border-b border-rule px-4 py-3">
+    <div className={cn("flex flex-col border border-rule bg-ink-2", compact ? "h-auto md:h-[460px]" : "h-auto md:h-[640px]")}>
+      <header className="flex flex-col gap-3 border-b border-rule px-4 py-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <StatusDot tone="gold" live />
           <div className="min-w-0">
@@ -56,21 +56,21 @@ export function AgentDetail({
             </div>
           </div>
         </div>
-        <div className="text-right">
+        <div className="text-left md:text-right">
           <div className="smallcaps">Live · same primitives</div>
           <div className="text-[10.5px] text-paper-fade font-mono">
             workflow_agent and production agent share this view
           </div>
         </div>
       </header>
-      <div className="grid flex-1 grid-cols-3 overflow-hidden">
-        <div className="overflow-hidden border-r border-rule">
+      <div className="grid flex-1 grid-cols-1 overflow-hidden md:grid-cols-3">
+        <div className="h-[260px] overflow-hidden border-b border-rule md:h-auto md:border-b-0 md:border-r">
           <ThoughtsPane events={events} />
         </div>
-        <div className="overflow-hidden border-r border-rule">
+        <div className="h-[260px] overflow-hidden border-b border-rule md:h-auto md:border-b-0 md:border-r">
           <MemoryPane events={events} />
         </div>
-        <div className="overflow-hidden">
+        <div className="h-[260px] overflow-hidden md:h-auto">
           <PolicyPane events={events} />
         </div>
       </div>
