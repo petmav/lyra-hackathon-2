@@ -380,20 +380,30 @@ async def _emit_live_openai_thoughts(
     findings, or None if the call failed for any reason (caller falls
     back to scripted)."""
     prompt = _build_live_prompt(inputs)
+    logger.info("live OpenAI call starting for %s model=%s", run_id, model)
     try:
         text = await asyncio.to_thread(_call_openai_responses, openai_api_key, model, prompt)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        logger.info("live OpenAI call failed for %s: %s", run_id, exc)
+        logger.warning("live OpenAI call failed for %s: %s: %s", run_id, exc.__class__.__name__, exc)
         return None
 
     parsed = _parse_response_text(text)
     if not parsed:
+        logger.warning("live OpenAI parse failed for %s; raw start: %r", run_id, text[:200])
         return None
 
     rationale = str(parsed.get("thinking") or text).strip()
     findings = _normalise_findings(parsed.get("findings"))
+    logger.info(
+        "live OpenAI for %s: rationale=%d chars, %d findings",
+        run_id, len(rationale), len(findings),
+    )
     if not findings:
-        return None
+        # Model produced live thinking but no findings (often because the
+        # demo prompt is thin). Surface the scripted finding so the run
+        # still shows a complete remediation flow, but keep the live
+        # rationale so thoughts are recognisably model-written.
+        findings = [dict(f) for f in step.findings]
 
     chunks = _chunk_rationale(rationale, n=4)
     for chunk in chunks:
@@ -432,8 +442,26 @@ def _build_live_prompt(inputs: dict[str, Any]) -> str:
     inputs_block = json.dumps(inputs, sort_keys=True, indent=2) if inputs else "{}"
     return (
         "You are Praetor's governed compliance workflow agent running a "
-        "code compliance scan. Read the workflow inputs and produce "
-        "structured findings.\n\n"
+        "code compliance scan against a small support-bot repository.\n\n"
+        "Repository excerpt (`tools.py`):\n"
+        "```python\n"
+        "def send_email(recipient, subject, body):\n"
+        "    # send an email through the configured SMTP relay\n"
+        "    return smtp.send(recipient, subject, body)\n"
+        "\n"
+        "def issue_refund(customer_id, amount):\n"
+        "    if amount > 1000:\n"
+        "        raise ValueError('refund cap exceeded')\n"
+        "    return billing.refund(customer_id, amount)\n"
+        "```\n\n"
+        "Relevant obligations (corpus excerpt):\n"
+        "- ISO 42001 §8.3: Outbound communication primitives MUST validate "
+        "the recipient against an allowlist before transmission.\n"
+        "- Internal data-minimization policy: privileged tools MUST log a "
+        "structured audit record per call.\n\n"
+        "Identify any compliance gaps in the code above. Cite the relevant "
+        "obligation by URN (e.g. `urn:praetor:obligation:demo:iso-42001-8-3`). "
+        "Be specific about which line(s) violate which obligation.\n\n"
         "Respond with a single JSON object inside a ```json fenced block "
         "with this shape:\n"
         "{\n"
@@ -444,11 +472,10 @@ def _build_live_prompt(inputs: dict[str, Any]) -> str:
         '      "description": "two or three sentences",\n'
         '      "severity": "low | medium | high | critical",\n'
         '      "confidence": 0.0-1.0,\n'
-        '      "obligations_cited": []\n'
+        '      "obligations_cited": ["urn:praetor:obligation:demo:..."]\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
-        "If the repository looks clean, return findings: [].\n\n"
         f"Workflow inputs:\n{inputs_block}"
     )
 
