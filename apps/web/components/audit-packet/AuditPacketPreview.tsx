@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
+import { Button } from "@/components/primitives/Button";
 import { Hairline } from "@/components/primitives/Hairline";
+import { api } from "@/lib/api";
 import type { AuditPacket } from "@/lib/api/types";
 import { precise } from "@/lib/utils/time";
 import { shortHash } from "@/lib/utils/format";
@@ -130,6 +133,8 @@ export function AuditPacketPreview({ packet }: { packet: AuditPacket }) {
             ))}
           </ul>
           <Hairline className="my-5" />
+          <DownloadRow packet={packet} />
+          <Hairline className="my-5" />
           <p className="text-[11.5px] text-paper-fade italic leading-snug">
             The JSON sidecar accompanying this PDF is signed with ed25519. An
             external verifier can validate the signature without contacting
@@ -146,6 +151,38 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <div className="text-[9.5px] uppercase tracking-[0.22em] text-ink/55 mb-1">{label}</div>
       <div className="text-ink">{children}</div>
+    </div>
+  );
+}
+
+function DownloadRow({ packet }: { packet: AuditPacket }) {
+  const [busy, setBusy] = useState<"pdf" | "sidecar" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const ready = packet.status === "ready";
+  const onDownload = async (kind: "pdf" | "sidecar") => {
+    if (busy || !ready) return;
+    setBusy(kind);
+    setError(null);
+    try {
+      await api.auditPackets.download(packet.id, kind);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div>
+      <div className="smallcaps mb-2">Download</div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="primary" onClick={() => onDownload("pdf")} disabled={!ready || busy !== null}>
+          {busy === "pdf" ? "downloading…" : "PDF"}
+        </Button>
+        <Button variant="ghost" onClick={() => onDownload("sidecar")} disabled={!ready || busy !== null}>
+          {busy === "sidecar" ? "downloading…" : "JSON sidecar"}
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-[11px] text-crit">{error}</p>}
     </div>
   );
 }

@@ -22,7 +22,14 @@ export function AuditPacketBuilder({ onCreated }: { onCreated?: (p: { packet_id:
 
   const onGenerate = async () => {
     setBusy(true);
-    const r = await api.auditPackets.generate({ label: scope === "all" ? `${period} · all surfaces` : `${period} · ${scope}` });
+    const periodDays = Number(period.replace(/\D/g, "")) || 7;
+    const surfaces =
+      scope === "workflow_only" ? ["workflow"] : scope === "supervision_only" ? ["supervision"] : ["workflow", "supervision"];
+    const r = await api.auditPackets.generate({
+      label: scope === "all" ? `${period} · all surfaces` : `${period} · ${scope}`,
+      period_days: periodDays,
+      surfaces
+    });
     setBusy(false);
     onCreated?.(r);
   };

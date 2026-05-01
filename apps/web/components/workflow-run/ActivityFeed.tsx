@@ -40,12 +40,25 @@ export function ActivityFeed({ run }: { run: WorkflowRun }) {
   const visible = events.filter((e) => VISIBLE_TYPES.has(e.type));
   const tail = visible.slice(-30);
 
-  const tailRef = useRef<HTMLLIElement | null>(null);
+  // Auto-scroll the inner list — never the page — and only when the user is
+  // already pinned to the bottom. Once they scroll up to read older events
+  // we leave them there until they scroll back down themselves.
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const stickRef = useRef(true);
   useEffect(() => {
-    if (RUNNING_STATUSES.has(run.status) && tailRef.current) {
-      tailRef.current.scrollIntoView({ block: "end", behavior: "smooth" });
+    const el = listRef.current;
+    if (!el) return;
+    if (stickRef.current && RUNNING_STATUSES.has(run.status)) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [tail.length, run.status]);
+
+  const onScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
+    stickRef.current = distance < 24;
+  };
 
   return (
     <section className="border border-rule">
@@ -55,18 +68,14 @@ export function ActivityFeed({ run }: { run: WorkflowRun }) {
           {connected ? `${visible.length} live` : `${visible.length} ·`}
         </span>
       </header>
-      <ul className="max-h-[420px] overflow-y-auto">
+      <ul ref={listRef} onScroll={onScroll} className="max-h-[420px] overflow-y-auto overscroll-contain">
         {tail.length === 0 ? (
           <li className="px-4 py-8 text-center text-[12px] italic text-paper-fade">
             No events yet.
           </li>
         ) : (
-          tail.map((e, i) => (
-            <li
-              key={e.id}
-              ref={i === tail.length - 1 ? tailRef : undefined}
-              className="border-b border-rule px-4 py-2"
-            >
+          tail.map((e) => (
+            <li key={e.id} className="border-b border-rule px-4 py-2">
               <Row event={e} />
             </li>
           ))

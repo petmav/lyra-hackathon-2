@@ -216,6 +216,7 @@ def get_static_obligation(urn: str) -> dict[str, Any] | None:
 
 def _load_obligation_seed_rows() -> list[dict[str, Any]]:
     by_urn = {row["urn"]: dict(row) for row in OBLIGATIONS}
+    seen_ids = {row["id"] for row in by_urn.values()}
     for path in _obligation_seed_files():
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         framework = str(payload.get("framework") or path.stem)
@@ -229,8 +230,15 @@ def _load_obligation_seed_rows() -> list[dict[str, Any]]:
             urn = str(item.get("urn") or "")
             if not urn:
                 continue
+            row_id = str(item.get("id") or urn.rsplit(":", 1)[-1])
+            # Skip YAML rows whose id collides with an in-memory baseline
+            # entry under a different URN. The baseline URN is what the
+            # simulator and review services reference; keeping it canonical
+            # avoids duplicate React keys on the obligations page.
+            if urn not in by_urn and row_id in seen_ids:
+                continue
             by_urn[urn] = {
-                "id": str(item.get("id") or urn.rsplit(":", 1)[-1]),
+                "id": row_id,
                 "urn": urn,
                 "framework": str(item.get("framework") or framework),
                 "citation": str(item.get("citation") or ""),
@@ -239,6 +247,7 @@ def _load_obligation_seed_rows() -> list[dict[str, Any]]:
                 "severity_default": str(item.get("severity_default") or "warn"),
                 "version": str(item.get("version") or version),
             }
+            seen_ids.add(row_id)
     return list(by_urn.values())
 
 

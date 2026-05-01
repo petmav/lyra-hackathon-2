@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 import json
 
 from praetor_api.db import AsyncSessionLocal
-from praetor_api.services.demo_state import SANDBOX_RUNS
+from praetor_api.services.demo_state import SANDBOX_RUNS, ensure_demo_state
 from praetor_api.services import production_reviews
 from praetor_api.settings import get_settings
 
@@ -15,6 +15,7 @@ async def sandbox_runs() -> list[dict]:
     if get_settings().data_mode == "production":
         async with AsyncSessionLocal() as session:
             return await production_reviews.list_sandbox_runs(session)
+    ensure_demo_state()
     return list(SANDBOX_RUNS.values())
 
 
@@ -27,6 +28,7 @@ async def sandbox_run(sandbox_id: str) -> dict:
             raise HTTPException(status_code=404, detail="sandbox run not found")
         return found
 
+    ensure_demo_state()
     found = SANDBOX_RUNS.get(sandbox_id)
     if found is None:
         raise HTTPException(status_code=404, detail="sandbox run not found")
@@ -41,6 +43,7 @@ async def sandbox_run_logs(sandbox_id: str) -> StreamingResponse:
         if chunks is None:
             raise HTTPException(status_code=404, detail="sandbox run not found")
     else:
+        ensure_demo_state()
         found = SANDBOX_RUNS.get(sandbox_id)
         if found is None:
             raise HTTPException(status_code=404, detail="sandbox run not found")

@@ -193,8 +193,32 @@ async def run_workflow(workflow_id: str, request: RunWorkflowRequest) -> dict[st
 @router.post("/workflows/{workflow_id}:schedule")
 @router.post("/workflows/{workflow_id}/schedule")
 async def schedule_workflow(workflow_id: str, request: ScheduleWorkflowRequest) -> dict[str, Any]:
-    if get_settings().data_mode != "production":
-        raise HTTPException(status_code=400, detail="scheduling workflows requires production data mode")
+    settings = get_settings()
+    if settings.data_mode != "production":
+        wf = get_workflow(workflow_id)
+        if wf is None:
+            raise HTTPException(status_code=404, detail="workflow not found")
+        from datetime import UTC, datetime, timedelta
+
+        interval = production_workflows._recurrence_interval_seconds(
+            request.recurrence, request.continuous_monitoring
+        )
+        now = datetime.now(UTC)
+        wf["trigger"] = "schedule" if request.enabled else "manual"
+        wf["trigger_config"] = {
+            "mode": "continuous" if request.continuous_monitoring else "schedule",
+            "enabled": request.enabled,
+            "continuous_monitoring": request.continuous_monitoring,
+            "recurrence": request.recurrence,
+            "interval_seconds": interval,
+            "next_run_at": (now + timedelta(seconds=interval)).isoformat(),
+            "last_run_at": None,
+            "inputs": request.inputs,
+            "model_provider": request.model_provider or settings.default_model_provider,
+            "model": request.model or settings.default_model_name,
+        }
+        return wf
+
     try:
         async with AsyncSessionLocal() as session:
             scheduled = await production_workflows.configure_workflow_schedule(
@@ -204,8 +228,8 @@ async def schedule_workflow(workflow_id: str, request: ScheduleWorkflowRequest) 
                 enabled=request.enabled,
                 continuous_monitoring=request.continuous_monitoring,
                 recurrence=request.recurrence,
-                model_provider=request.model_provider or get_settings().default_model_provider,
-                model=request.model or get_settings().default_model_name,
+                model_provider=request.model_provider or settings.default_model_provider,
+                model=request.model or settings.default_model_name,
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

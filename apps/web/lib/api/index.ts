@@ -753,13 +753,42 @@ export const api = {
       await sleep();
       return fxAuditPackets.find((p) => p.id === id) ?? null;
     },
-    async generate(_scope: AuditPacket["scope"]): Promise<{ packet_id: string; status: AuditPacket["status"] }> {
+    async generate(payload: {
+      label?: string;
+      period_days?: number;
+      surfaces?: string[];
+      asset_ids?: string[];
+      workflow_run_ids?: string[];
+      obligation_urns?: string[];
+    } = {}): Promise<{ packet_id: string; status: AuditPacket["status"] }> {
       if (USE_API) {
-        const packet = await request<AuditPacket>("/audit-packets:generate", { method: "POST" });
+        const packet = await request<AuditPacket>("/audit-packets:generate", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
         return { packet_id: packet.id, status: packet.status ?? "ready" };
       }
       await sleep(400);
       return { packet_id: "ap_demo_pending", status: "generating" };
+    },
+    async download(id: string, kind: "pdf" | "sidecar"): Promise<void> {
+      if (!USE_API || !API_BASE) throw new Error("Audit packet downloads require the API data source.");
+      const response = await fetch(`${API_BASE}/audit-packets/${encodeURIComponent(id)}/${kind}`, {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${API_TOKEN}` }
+      });
+      if (!response.ok) {
+        throw new Error(`Praetor API ${response.status}: ${await response.text()}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${id}.${kind === "pdf" ? "pdf" : "json"}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
     }
   },
 
